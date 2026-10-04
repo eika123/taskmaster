@@ -9,11 +9,12 @@ edition = "2021"
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router", "fullstack"] }
 serde = { version = "1.0", features = ["derive"] }
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros"], optional = true }
+tokio = { version = "1", features = ["sync"], optional = true }
 
 [features]
 default = ["web"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
-server = ["dioxus/server", "dep:rusqlite"]
+server = ["dioxus/server", "dep:sqlx", "dep:tokio"]
