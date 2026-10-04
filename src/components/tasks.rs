@@ -399,27 +399,30 @@ pub fn TaskView() -> Element {
                 },
             }
 
-            // Columns Container
+            // Columns Container: Side-by-side slideable board
             if active_statuses.is_empty() {
                 div { class: "no-columns-notice",
                     p { "No columns selected. Click one or more status pills above to view tasks." }
                 }
             } else {
-                div { class: "task-columns-grid",
-                    for status in active_statuses {
-                        TaskColumn {
-                            key: "{status.as_str()}",
-                            status,
-                            tasks: task_list.clone(),
-                            all_users: all_users.clone(),
-                            on_dismiss: on_dismiss_handler,
-                            on_status_change: on_status_change_handler,
-                            on_assign: on_assign_handler,
-                            on_unassign: on_unassign_handler,
+                div { class: "task-board-scroll-container",
+                    div { class: "task-columns-row",
+                        for status in active_statuses {
+                            TaskColumn {
+                                key: "{status.as_str()}",
+                                status,
+                                tasks: task_list.clone(),
+                                all_users: all_users.clone(),
+                                on_dismiss: on_dismiss_handler,
+                                on_status_change: on_status_change_handler,
+                                on_assign: on_assign_handler,
+                                on_unassign: on_unassign_handler,
+                            }
                         }
                     }
                 }
             }
+
         }
     }
 }
