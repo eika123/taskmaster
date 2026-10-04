@@ -18,15 +18,6 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    #[cfg(feature = "server")]
-    pub const ALL: &'static [TaskStatus] = &[
-        Self::Suggested,
-        Self::Accepted,
-        Self::Assigned,
-        Self::InProgress,
-        Self::Finished,
-    ];
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Suggested => "suggested",
@@ -36,22 +27,11 @@ impl TaskStatus {
             Self::Finished => "finished",
         }
     }
-
-    /// Generates a comma-separated list of quoted status strings for SQL CHECK constraints:
-    /// e.g., `'suggested', 'accepted', 'assigned', 'in_progress', 'finished'`
-    #[cfg(feature = "server")]
-    pub fn sql_check_constraint_list() -> String {
-        Self::ALL
-            .iter()
-            .map(|s| format!("'{}'", s.as_str()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 impl std::fmt::Display for TaskStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        f.write_str(self.as_str())
     }
 }
 
@@ -69,8 +49,6 @@ impl std::str::FromStr for TaskStatus {
         }
     }
 }
-
-
 
 #[cfg(feature = "server")]
 static POOL: tokio::sync::OnceCell<sqlx::SqlitePool> = tokio::sync::OnceCell::const_new();
@@ -97,8 +75,8 @@ pub async fn get_db() -> &'static sqlx::SqlitePool {
 
 #[cfg(feature = "server")]
 async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    let schema_sql = format!(
-        "CREATE TABLE IF NOT EXISTS user (
+    let schema_sql = "
+        CREATE TABLE IF NOT EXISTS user (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE
@@ -108,7 +86,7 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
             title TEXT NOT NULL,
             description TEXT,
             author INTEGER NOT NULL,
-            status TEXT CHECK (status IN ({valid_statuses})),
+            status TEXT CHECK (status IN ('suggested', 'accepted', 'assigned', 'in_progress', 'finished')),
             FOREIGN KEY(author) REFERENCES user(id)
         );
         CREATE TABLE IF NOT EXISTS assignments (
@@ -123,7 +101,7 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TRIGGER IF NOT EXISTS prevent_assign_suggested_task
         BEFORE INSERT ON assignments
         FOR EACH ROW
-        WHEN (SELECT status FROM task WHERE id = NEW.task_id) = '{suggested}'
+        WHEN (SELECT status FROM task WHERE id = NEW.task_id) = 'suggested'
         BEGIN
             SELECT RAISE(FAIL, 'Cannot assign a task that has suggested status');
         END;
@@ -132,7 +110,7 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TRIGGER IF NOT EXISTS enforce_in_progress_assigned
         BEFORE UPDATE OF status ON task
         FOR EACH ROW
-        WHEN NEW.status = '{in_progress}' AND NOT EXISTS (SELECT 1 FROM assignments WHERE task_id = NEW.id)
+        WHEN NEW.status = 'in_progress' AND NOT EXISTS (SELECT 1 FROM assignments WHERE task_id = NEW.id)
         BEGIN
             SELECT RAISE(FAIL, 'Cannot set status to in_progress without an assignee');
         END;
@@ -141,7 +119,7 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TRIGGER IF NOT EXISTS prevent_unassign_in_progress_task
         BEFORE DELETE ON assignments
         FOR EACH ROW
-        WHEN (SELECT status FROM task WHERE id = OLD.task_id) = '{in_progress}' 
+        WHEN (SELECT status FROM task WHERE id = OLD.task_id) = 'in_progress' 
              AND (SELECT COUNT(*) FROM assignments WHERE task_id = OLD.task_id) <= 1
         BEGIN
             SELECT RAISE(FAIL, 'Cannot remove the last assignee from an in_progress task');
@@ -164,11 +142,8 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
             (13, 'Ewan McGregor', 'ewan.mcgregor@coruscant.com'),
             (14, 'Gordon Brown', 'gordon-brown@gov.uk'),
             (15, 'George Best', 'george.best@manchester.united.com');
-        ",
-        valid_statuses = TaskStatus::sql_check_constraint_list(),
-        suggested = TaskStatus::Suggested.as_str(),
-        in_progress = TaskStatus::InProgress.as_str(),
-    );
+    ";
+
 
     sqlx::raw_sql(&schema_sql).execute(pool).await?;
     Ok(())
