@@ -301,7 +301,7 @@ pub fn TaskView() -> Element {
         TaskStatus::Finished,
     ]);
 
-    let mut tasks = use_server_future(|| async move {
+    let tasks = use_server_future(|| async move {
         get_all_tasks(None, 50).await
     })?;
 
@@ -309,35 +309,63 @@ pub fn TaskView() -> Element {
         get_users().await
     })?;
 
-    let res = tasks.read();
-    let task_list = match &*res {
-        Some(Ok(list)) => list.clone(),
-        Some(Err(err)) => return rsx! {
-            p { "Failed to load tasks: {err}" }
-        },
-        None => return rsx! {
-            p { "Loading tasks..." }
-        },
-    };
+    let mut task_list = use_signal(|| {
+        match &*tasks.read() {
+            Some(Ok(list)) => list.clone(),
+            _ => Vec::new(),
+        }
+    });
 
-    let users_read = users_resource.read();
-    let all_users = match &*users_read {
-        Some(Ok(list)) => list.clone(),
-        _ => Vec::new(),
-    };
+    let mut all_users = use_signal(|| {
+        match &*users_resource.read() {
+            Some(Ok(list)) => list.clone(),
+            _ => Vec::new(),
+        }
+    });
+
+    use_effect(move || {
+        if let Some(Ok(list)) = &*tasks.read() {
+            task_list.set(list.clone());
+        }
+    });
+
+    use_effect(move || {
+        if let Some(Ok(list)) = &*users_resource.read() {
+            all_users.set(list.clone());
+        }
+    });
 
     let on_dismiss_handler = move |task_id: i64| {
+        task_list.with_mut(|tasks| {
+            tasks.retain(|t| t.id != task_id);
+        });
         spawn(async move {
-            if delete_task(task_id).await.is_ok() {
-                tasks.restart();
+            let _ = delete_task(task_id).await;
+            if let Ok(fresh) = get_all_tasks(None, 50).await {
+                task_list.set(fresh);
             }
         });
     };
 
-    let on_status_change_handler = move |(task_id, new_status)| {
+    let on_status_change_handler = move |(task_id, new_status): (u64, TaskStatus)| {
+        task_list.with_mut(|tasks| {
+            if let Some(t) = tasks.iter_mut().find(|t| t.id == task_id as i64) {
+                t.status = new_status;
+            }
+        });
         spawn(async move {
-            if set_task_status(task_id, new_status).await.is_ok() {
-                tasks.restart();
+            match set_task_status(task_id, new_status).await {
+                Ok(_) => {
+                    if let Ok(fresh) = get_all_tasks(None, 50).await {
+                        task_list.set(fresh);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Failed to set task status: {err}");
+                    if let Ok(fresh) = get_all_tasks(None, 50).await {
+                        task_list.set(fresh);
+                    }
+                }
             }
         });
     };
@@ -345,7 +373,9 @@ pub fn TaskView() -> Element {
     let on_assign_handler = move |(task_id, user_id): (i64, i64)| {
         spawn(async move {
             if assign_task(task_id, user_id).await.is_ok() {
-                tasks.restart();
+                if let Ok(fresh) = get_all_tasks(None, 50).await {
+                    task_list.set(fresh);
+                }
             }
         });
     };
@@ -353,12 +383,16 @@ pub fn TaskView() -> Element {
     let on_unassign_handler = move |(task_id, user_id): (i64, i64)| {
         spawn(async move {
             if unassign_task(task_id, user_id).await.is_ok() {
-                tasks.restart();
+                if let Ok(fresh) = get_all_tasks(None, 50).await {
+                    task_list.set(fresh);
+                }
             }
         });
     };
 
     let active_statuses = selected_statuses();
+    let current_tasks = task_list();
+    let current_users = all_users();
 
     rsx! {
         div { class: "task-view",
@@ -411,8 +445,8 @@ pub fn TaskView() -> Element {
                             TaskColumn {
                                 key: "{status.as_str()}",
                                 status,
-                                tasks: task_list.clone(),
-                                all_users: all_users.clone(),
+                                tasks: current_tasks.clone(),
+                                all_users: current_users.clone(),
                                 on_dismiss: on_dismiss_handler,
                                 on_status_change: on_status_change_handler,
                                 on_assign: on_assign_handler,

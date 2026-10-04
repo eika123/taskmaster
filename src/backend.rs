@@ -56,7 +56,8 @@ static POOL: tokio::sync::OnceCell<sqlx::SqlitePool> = tokio::sync::OnceCell::co
 #[cfg(feature = "server")]
 pub async fn get_db() -> &'static sqlx::SqlitePool {
     POOL.get_or_init(|| async {
-        let options = SqliteConnectOptions::from_str("sqlite:todolist.db")
+        let _ = std::fs::create_dir_all("data");
+        let options = SqliteConnectOptions::from_str("sqlite:data/todolist.db")
             .expect("Invalid SQLite connection string")
             .create_if_missing(true)
             .foreign_keys(true);
