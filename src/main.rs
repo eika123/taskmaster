@@ -5,10 +5,16 @@ use crate::components::*;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
-enum Route {
+pub enum Route {
     #[layout(Navbar)]
     #[route("/")]
-    Home {}
+    LandingPage {},
+    #[route("/tasks")]
+    TasksDashboardPage {},
+    #[route("/task/new")]
+    NewTaskPage {},
+    #[route("/task/:id")]
+    TaskPage { id: i64 },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -29,25 +35,37 @@ fn App() -> Element {
     }
 }
 
-/// Home page
+// /// Task board dashboard page
 #[component]
-fn Home() -> Element {
+fn TasksDashboardPage() -> Element {
     rsx! {
         TaskView {}
     }
 }
 
-
-
-
-/// Shared navbar component.
+/// Shared navigation header.
 #[component]
 fn Navbar() -> Element {
     rsx! {
-        div { id: "navbar",
-            Link { to: Route::Home {}, "Home" }
+        header { class: "app-header",
+            div { class: "app-navbar",
+                div { class: "navbar-brand",
+                    Link { to: Route::LandingPage {}, class: "brand-link",
+                        span { class: "brand-logo", "⚡" }
+                        span { class: "brand-name", "FlowTask" }
+                    }
+                }
+                nav { class: "navbar-links",
+                    Link { to: Route::LandingPage {}, class: "nav-link", "Home" }
+                    Link { to: Route::TasksDashboardPage {}, class: "nav-link", "Task Board" }
+                }
+            
+            // div { class: "navbar-actions",
+            //     Link { to: Route::NewTaskPage {}, class: "btn-navbar-new", "+ New Task" }
+            // }
+            }
         }
 
-        Outlet::<Route> {}
+        main { class: "app-main-content", Outlet::<Route> {} }
     }
 }

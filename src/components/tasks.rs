@@ -1,5 +1,12 @@
 use dioxus::prelude::*;
-use crate::backend::{delete_task, get_all_tasks, suggest_task, Task};
+use super::assignee_search::TaskAssigneesSection;
+use super::column_selector::ColumnSelector;
+use super::status_select::TaskStatusSelect;
+use crate::Route;
+use crate::backend::{
+    assign_task, delete_task, get_all_tasks, get_users, set_task_status, unassign_task, Task, TaskStatus,
+    User,
+};
 
 
 #[component]
@@ -37,7 +44,6 @@ pub fn AcceptedTasks() -> Element {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskData {
@@ -93,26 +99,71 @@ pub fn SuggestTaskForm(on_submit: EventHandler<TaskData>) -> Element {
 }
 
 #[component]
-pub fn SuggestedTaskCard(
+pub fn TaskCard(
     task: Task,
+    all_users: Vec<User>,
     on_dismiss: Option<EventHandler<i64>>,
+    on_status_change: Option<EventHandler<(u64, TaskStatus)>>,
+    on_assign: Option<EventHandler<(i64, i64)>>,
+    on_unassign: Option<EventHandler<(i64, i64)>>,
 ) -> Element {
     let task_id = task.id;
     let title = task.title.clone();
+    let author_name = task.author_name.clone();
     let description = task.description.clone();
+    let current_status = task.status;
+    let assignees = task.assignees.clone();
 
     rsx! {
-        div { class: "task-card task-card-suggested",
+        div { class: "task-card",
             div { class: "task-card-content",
                 div { class: "task-card-header",
-                    h3 { class: "task-card-title", "{title}" }
+                    div { class: "task-card-title-group",
+                        Link {
+                            to: Route::TaskPage { id: task_id },
+                            class: "task-card-title-link",
+                            h3 { class: "task-card-title", "{title}" }
+                        }
+
+                        span { class: "task-card-author", "Created by: {author_name}" }
+                    }
+
+                    // Status dropdown helper component
+                    TaskStatusSelect {
+                        status: current_status,
+                        aria_label: "Status for task: {title}",
+                        on_change: move |new_status| {
+                            if let Some(cb) = on_status_change {
+                                cb.call((task_id as u64, new_status));
+                            }
+                        },
+                    }
                 }
+
                 if !description.is_empty() {
                     div { class: "task-card-body",
                         p { class: "task-card-description", "{description}" }
                     }
                 }
+
+                // Assignee badges, search input & dropdown helper component
+                TaskAssigneesSection {
+                    assignees,
+                    all_users,
+                    task_title: title.clone(),
+                    on_assign: move |user_id| {
+                        if let Some(cb) = on_assign {
+                            cb.call((task_id, user_id));
+                        }
+                    },
+                    on_unassign: move |user_id| {
+                        if let Some(cb) = on_unassign {
+                            cb.call((task_id, user_id));
+                        }
+                    },
+                }
             }
+
             div { class: "task-card-footer",
                 button {
                     r#type: "button",
@@ -131,25 +182,81 @@ pub fn SuggestedTaskCard(
     }
 }
 
+
+// Backward-compatibility alias
 #[component]
-pub fn SuggestedTasks(
-    tasks: Vec<Task>,
+pub fn SuggestedTaskCard(
+    task: Task,
+    all_users: Option<Vec<User>>,
     on_dismiss: Option<EventHandler<i64>>,
+    on_status_change: Option<EventHandler<(u64, TaskStatus)>>,
+    on_assign: Option<EventHandler<(i64, i64)>>,
+    on_unassign: Option<EventHandler<(i64, i64)>>,
 ) -> Element {
     rsx! {
-        div { id: "task-status-suggested", class: "task-status-group",
-            h2 { "Suggested Tasks" }
-            if tasks.is_empty() {
-                p { class: "empty-message", "No suggested tasks present" }
+        TaskCard {
+            task,
+            all_users: all_users.unwrap_or_default(),
+            on_dismiss,
+            on_status_change,
+            on_assign,
+            on_unassign,
+        }
+    }
+}
+
+#[component]
+pub fn TaskColumn(
+    status: TaskStatus,
+    tasks: Vec<Task>,
+    all_users: Vec<User>,
+    on_dismiss: Option<EventHandler<i64>>,
+    on_status_change: Option<EventHandler<(u64, TaskStatus)>>,
+    on_assign: Option<EventHandler<(i64, i64)>>,
+    on_unassign: Option<EventHandler<(i64, i64)>>,
+) -> Element {
+    let filtered_tasks: Vec<Task> = tasks.into_iter().filter(|t| t.status == status).collect();
+    let status_name = match status {
+        TaskStatus::Suggested => "Suggested",
+        TaskStatus::Accepted => "Accepted",
+        TaskStatus::Assigned => "Assigned",
+        TaskStatus::InProgress => "In Progress",
+        TaskStatus::Finished => "Finished",
+    };
+
+    rsx! {
+        div { class: "task-column",
+            div { class: "task-column-header",
+                h2 { class: "task-column-title", "{status_name}" }
+                span { class: "task-column-badge", "{filtered_tasks.len()}" }
+            }
+            if filtered_tasks.is_empty() {
+                p { class: "empty-message", "No {status_name.to_lowercase()} tasks" }
             } else {
                 ul { class: "task-list", role: "list",
-                    for task in tasks {
+                    for task in filtered_tasks {
                         li { key: "{task.id}", class: "task-list-item",
-                            SuggestedTaskCard {
+                            TaskCard {
                                 task: task.clone(),
+                                all_users: all_users.clone(),
                                 on_dismiss: move |id| {
                                     if let Some(cb) = on_dismiss {
                                         cb.call(id);
+                                    }
+                                },
+                                on_status_change: move |args| {
+                                    if let Some(cb) = on_status_change {
+                                        cb.call(args);
+                                    }
+                                },
+                                on_assign: move |args| {
+                                    if let Some(cb) = on_assign {
+                                        cb.call(args);
+                                    }
+                                },
+                                on_unassign: move |args| {
+                                    if let Some(cb) = on_unassign {
+                                        cb.call(args);
                                     }
                                 },
                             }
@@ -161,10 +268,45 @@ pub fn SuggestedTasks(
     }
 }
 
+// Backward-compatibility alias
+#[component]
+pub fn SuggestedTasks(
+    tasks: Vec<Task>,
+    all_users: Option<Vec<User>>,
+    on_dismiss: Option<EventHandler<i64>>,
+    on_status_change: Option<EventHandler<(u64, TaskStatus)>>,
+    on_assign: Option<EventHandler<(i64, i64)>>,
+    on_unassign: Option<EventHandler<(i64, i64)>>,
+) -> Element {
+    rsx! {
+        TaskColumn {
+            status: TaskStatus::Suggested,
+            tasks,
+            all_users: all_users.unwrap_or_default(),
+            on_dismiss,
+            on_status_change,
+            on_assign,
+            on_unassign,
+        }
+    }
+}
+
 #[component]
 pub fn TaskView() -> Element {
+    let mut selected_statuses = use_signal(|| vec![
+        TaskStatus::Suggested,
+        TaskStatus::Accepted,
+        TaskStatus::Assigned,
+        TaskStatus::InProgress,
+        TaskStatus::Finished,
+    ]);
+
     let mut tasks = use_server_future(|| async move {
-        get_all_tasks(None, 10).await
+        get_all_tasks(None, 50).await
+    })?;
+
+    let users_resource = use_server_future(|| async move {
+        get_users().await
     })?;
 
     let res = tasks.read();
@@ -178,36 +320,109 @@ pub fn TaskView() -> Element {
         },
     };
 
+    let users_read = users_resource.read();
+    let all_users = match &*users_read {
+        Some(Ok(list)) => list.clone(),
+        _ => Vec::new(),
+    };
+
+    let on_dismiss_handler = move |task_id: i64| {
+        spawn(async move {
+            if delete_task(task_id).await.is_ok() {
+                tasks.restart();
+            }
+        });
+    };
+
+    let on_status_change_handler = move |(task_id, new_status)| {
+        spawn(async move {
+            if set_task_status(task_id, new_status).await.is_ok() {
+                tasks.restart();
+            }
+        });
+    };
+
+    let on_assign_handler = move |(task_id, user_id): (i64, i64)| {
+        spawn(async move {
+            if assign_task(task_id, user_id).await.is_ok() {
+                tasks.restart();
+            }
+        });
+    };
+
+    let on_unassign_handler = move |(task_id, user_id): (i64, i64)| {
+        spawn(async move {
+            if unassign_task(task_id, user_id).await.is_ok() {
+                tasks.restart();
+            }
+        });
+    };
+
+    let active_statuses = selected_statuses();
+
     rsx! {
         div { class: "task-view",
-            SuggestTaskForm {
-                on_submit: move |data: TaskData| {
-                    spawn(async move {
-                        if suggest_task(
-                                "dummy@example.com".to_string(),
-                                data.title,
-                                data.description,
-                            )
-                            .await
-                            .is_ok()
-                        {
-                            tasks.restart();
-                        }
-                    });
+            div { class: "task-view-topbar",
+                h1 { class: "task-view-title", "Task Board" }
+                Link {
+                    to: Route::NewTaskPage {},
+                    class: "btn-create-task",
+                    span { class: "btn-create-icon", "+" }
+                    " New Task"
+                }
+            }
+
+
+            // Interactive Column Selector
+            ColumnSelector {
+                selected_statuses: active_statuses.clone(),
+                on_toggle: move |status: TaskStatus| {
+                    let mut list = selected_statuses();
+                    if let Some(pos) = list.iter().position(|&s| s == status) {
+                        list.remove(pos);
+                    } else {
+                        list.push(status);
+                    }
+                    selected_statuses.set(list);
+                },
+                on_select_all: move |_| {
+                    selected_statuses.set(vec![
+                        TaskStatus::Suggested,
+                        TaskStatus::Accepted,
+                        TaskStatus::Assigned,
+                        TaskStatus::InProgress,
+                        TaskStatus::Finished,
+                    ]);
+                },
+                on_clear: move |_| {
+                    selected_statuses.set(Vec::new());
                 },
             }
-            SuggestedTasks {
-                tasks: task_list,
-                on_dismiss: move |task_id: i64| {
-                    spawn(async move {
-                        if delete_task(task_id).await.is_ok() {
-                            tasks.restart();
+
+            // Columns Container
+            if active_statuses.is_empty() {
+                div { class: "no-columns-notice",
+                    p { "No columns selected. Click one or more status pills above to view tasks." }
+                }
+            } else {
+                div { class: "task-columns-grid",
+                    for status in active_statuses {
+                        TaskColumn {
+                            key: "{status.as_str()}",
+                            status,
+                            tasks: task_list.clone(),
+                            all_users: all_users.clone(),
+                            on_dismiss: on_dismiss_handler,
+                            on_status_change: on_status_change_handler,
+                            on_assign: on_assign_handler,
+                            on_unassign: on_unassign_handler,
                         }
-                    });
-                },
+                    }
+                }
             }
         }
     }
 }
+
 
 
