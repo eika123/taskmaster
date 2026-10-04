@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::backend::TaskStatus;
+use crate::types::TaskStatus;
 
 #[component]
 pub fn TaskStatusSelect(
@@ -21,31 +21,15 @@ pub fn TaskStatusSelect(
                     }
                 }
             },
-            option {
-                value: "suggested",
-                selected: status == TaskStatus::Suggested,
-                "Suggested"
-            }
-            option {
-                value: "accepted",
-                selected: status == TaskStatus::Accepted,
-                "Accepted"
-            }
-            option {
-                value: "assigned",
-                selected: status == TaskStatus::Assigned,
-                "Assigned"
-            }
+            option { value: "suggested", selected: status == TaskStatus::Suggested, "Suggested" }
+            option { value: "accepted", selected: status == TaskStatus::Accepted, "Accepted" }
+            option { value: "assigned", selected: status == TaskStatus::Assigned, "Assigned" }
             option {
                 value: "in_progress",
                 selected: status == TaskStatus::InProgress,
                 "In Progress"
             }
-            option {
-                value: "finished",
-                selected: status == TaskStatus::Finished,
-                "Finished"
-            }
+            option { value: "finished", selected: status == TaskStatus::Finished, "Finished" }
         }
     }
 }

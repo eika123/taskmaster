@@ -3,11 +3,9 @@ use super::assignee_search::TaskAssigneesSection;
 use super::column_selector::ColumnSelector;
 use super::status_select::TaskStatusSelect;
 use crate::Route;
-use crate::backend::{
-    assign_task, delete_task, get_all_tasks, get_users, set_task_status, unassign_task, Task, TaskStatus,
-    User,
-};
-
+use crate::backend::app_endpoints::{
+    assign_task, delete_task, get_all_tasks, get_users, set_task_status, unassign_task};
+use crate::types::{Task, TaskStatus, User};
 
 #[component]
 pub fn FinishedTasks() -> Element {
@@ -398,14 +396,11 @@ pub fn TaskView() -> Element {
         div { class: "task-view",
             div { class: "task-view-topbar",
                 h1 { class: "task-view-title", "Task Board" }
-                Link {
-                    to: Route::NewTaskPage {},
-                    class: "btn-create-task",
+                Link { to: Route::NewTaskPage {}, class: "btn-create-task",
                     span { class: "btn-create-icon", "+" }
                     " New Task"
                 }
             }
-
 
             // Interactive Column Selector
             ColumnSelector {
@@ -420,13 +415,16 @@ pub fn TaskView() -> Element {
                     selected_statuses.set(list);
                 },
                 on_select_all: move |_| {
-                    selected_statuses.set(vec![
-                        TaskStatus::Suggested,
-                        TaskStatus::Accepted,
-                        TaskStatus::Assigned,
-                        TaskStatus::InProgress,
-                        TaskStatus::Finished,
-                    ]);
+                    selected_statuses
+                        .set(
+                            vec![
+                                TaskStatus::Suggested,
+                                TaskStatus::Accepted,
+                                TaskStatus::Assigned,
+                                TaskStatus::InProgress,
+                                TaskStatus::Finished,
+                            ],
+                        );
                 },
                 on_clear: move |_| {
                     selected_statuses.set(Vec::new());
@@ -456,7 +454,7 @@ pub fn TaskView() -> Element {
                     }
                 }
             }
-
+        
         }
     }
 }

@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::backend::TaskStatus;
+use crate::types::TaskStatus;
 
 #[component]
 pub fn ColumnSelector(
@@ -39,7 +39,13 @@ pub fn ColumnSelector(
                                 class: if is_selected { "column-pill pill-active" } else { "column-pill" },
                                 aria_pressed: "{is_selected}",
                                 onclick: move |_| on_toggle.call(status),
-                                span { class: "pill-indicator", if is_selected { "✓ " } else { "+ " } }
+                                span { class: "pill-indicator",
+                                    if is_selected {
+                                        "✓ "
+                                    } else {
+                                        "+ "
+                                    }
+                                }
                                 "{status_label}"
                             }
                         }

@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::backend::suggest_task;
+use crate::backend::app_endpoints::suggest_task;
 use crate::Route;
 
 #[component]
@@ -66,9 +66,7 @@ pub fn NewTaskPage() -> Element {
                         *is_submitting.write() = true;
 
                         spawn(async move {
-                            // Automatically associate task with the current authenticated user
-                            let current_user_email = "alice@example.com".to_string();
-                            match suggest_task(current_user_email, current_title, current_desc).await {
+                            match suggest_task(current_title, current_desc).await {
                                 Ok(_) => {
                                     nav.push(Route::TasksDashboardPage {});
                                 }

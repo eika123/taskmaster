@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::backend::get_task;
+use crate::backend::app_endpoints::get_task;
 use crate::Route;
 
 #[component]

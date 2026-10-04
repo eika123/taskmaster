@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::backend::User;
+use crate::types::User;
 
 #[component]
 pub fn AssigneeBadgeList(
