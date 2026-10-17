@@ -5,7 +5,8 @@ use crate::types::User;
 pub fn AssigneeBadgeList(
     assignees: Vec<User>,
     task_title: String,
-    on_unassign: Option<EventHandler<i64>>,
+    can_mutate: bool,
+    on_unassign: EventHandler<i64>,
 ) -> Element {
     rsx! {
         div { class: "assignees-list",
@@ -21,16 +22,14 @@ pub fn AssigneeBadgeList(
                         rsx! {
                             span { key: "{user_id}", class: "assignee-badge",
                                 "{user_name}"
-                                button {
-                                    r#type: "button",
-                                    class: "btn-remove-assignee",
-                                    aria_label: "Remove {user_name} from task {title}",
-                                    onclick: move |_| {
-                                        if let Some(cb) = on_unassign {
-                                            cb.call(user_id);
-                                        }
-                                    },
-                                    "✕"
+                                if can_mutate {
+                                    button {
+                                        r#type: "button",
+                                        class: "btn-remove-assignee",
+                                        aria_label: "Remove {user_name} from task {title}",
+                                        onclick: move |_| on_unassign.call(user_id),
+                                        "✕"
+                                    }
                                 }
                             }
                         }
@@ -113,21 +112,25 @@ pub fn TaskAssigneesSection(
     assignees: Vec<User>,
     all_users: Vec<User>,
     task_title: String,
-    on_assign: Option<EventHandler<i64>>,
-    on_unassign: Option<EventHandler<i64>>,
+    can_mutate: bool,
+    on_assign: EventHandler<i64>,
+    on_unassign: EventHandler<i64>,
 ) -> Element {
     rsx! {
         div { class: "task-card-assignees",
             AssigneeBadgeList {
                 assignees: assignees.clone(),
                 task_title: task_title.clone(),
-                on_unassign,
+                can_mutate,
+                on_unassign: move |uid| on_unassign.call(uid),
             }
-            AssigneeSearchDropdown {
-                all_users,
-                current_assignees: assignees,
-                task_title,
-                on_assign,
+            if can_mutate {
+                AssigneeSearchDropdown {
+                    all_users,
+                    current_assignees: assignees,
+                    task_title,
+                    on_assign: move |uid| on_assign.call(uid),
+                }
             }
         }
     }

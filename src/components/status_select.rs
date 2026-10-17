@@ -5,7 +5,8 @@ use crate::types::TaskStatus;
 pub fn TaskStatusSelect(
     status: TaskStatus,
     aria_label: Option<String>,
-    on_change: Option<EventHandler<TaskStatus>>,
+    can_mutate: bool,
+    on_change: EventHandler<TaskStatus>,
 ) -> Element {
     let label = aria_label.unwrap_or_else(|| "Change task status".to_string());
 
@@ -14,10 +15,11 @@ pub fn TaskStatusSelect(
             class: "task-status-select",
             value: "{status.as_str()}",
             aria_label: "{label}",
+            disabled: !can_mutate,
             onchange: move |evt| {
-                if let Ok(new_status) = evt.value().parse::<TaskStatus>() {
-                    if let Some(cb) = on_change {
-                        cb.call(new_status);
+                if can_mutate {
+                    if let Ok(new_status) = evt.value().parse::<TaskStatus>() {
+                        on_change.call(new_status);
                     }
                 }
             },

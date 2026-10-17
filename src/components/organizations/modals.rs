@@ -488,6 +488,62 @@ pub fn ConfirmActiveTasksWarningModal(
 }
 
 #[component]
+pub fn ConfirmRemoveMemberModal(
+    member_name: String,
+    on_close: EventHandler<()>,
+    on_confirm: EventHandler<()>,
+    is_loading: bool,
+) -> Element {
+    rsx! {
+        div { class: "overlay-backdrop", style: "z-index: 1200;",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "overlay-modal",
+                style: "max-width: 480px; border-top: 4px solid var(--danger);",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "overlay-header",
+                    div { class: "overlay-title-group",
+                        h2 { class: "overlay-title", style: "color: var(--danger);", "Remove Organization Member" }
+                        p { class: "overlay-subtitle", "Are you sure you want to remove this member?" }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn-close-overlay",
+                        onclick: move |_| on_close.call(()),
+                        disabled: is_loading,
+                        "✕"
+                    }
+                }
+                div { style: "padding: 20px 24px; display: flex; flex-direction: column; gap: 14px;",
+                    p { style: "margin: 0; font-size: var(--font-size-body); color: var(--text-primary);",
+                        "Are you sure you want to remove "
+                        strong { "{member_name}" }
+                        " from the organization? They will lose all associated organization roles and project permissions."
+                    }
+                    div { class: "overlay-footer",
+                        button {
+                            r#type: "button",
+                            class: "btn-task-cancel",
+                            onclick: move |_| on_close.call(()),
+                            disabled: is_loading,
+                            "Cancel"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "btn-task-save",
+                            style: "background-color: var(--danger); border-color: var(--danger);",
+                            disabled: is_loading,
+                            onclick: move |_| on_confirm.call(()),
+                            if is_loading { "Removing..." } else { "Remove Member" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 pub fn CreateOrgProjectModal(
     organization_id: i64,
     organization_name: String,

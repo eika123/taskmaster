@@ -8,14 +8,15 @@ use crate::backend::app_endpoints::{
     revoke_organization_member_role,
 };
 use super::modals::{
-    AssignMemberRoleModal, ConfirmActiveTasksWarningModal, CreateOrgProjectModal,
-    CreateOrgRoleModal, InviteOrgMemberModal, TransferOrgGovernanceModal,
+    AssignMemberRoleModal, ConfirmActiveTasksWarningModal, ConfirmRemoveMemberModal,
+    CreateOrgProjectModal, CreateOrgRoleModal, InviteOrgMemberModal, TransferOrgGovernanceModal,
 };
 use crate::components::dashboard::ConfirmDeleteModal;
 
 #[derive(Clone, PartialEq, Eq)]
 enum PendingWarningAction {
     RevokeRole { user_id: i64, role: String },
+    RevokeMember { user_id: i64 },
 }
 
 #[component]
@@ -39,6 +40,8 @@ pub fn OrganizationGovernorView(
     let mut show_transfer_modal = use_signal(|| false);
     let mut show_delete_modal = use_signal(|| false);
     let mut active_assign_member = use_signal(|| Option::<OrganizationMember>::None);
+    let mut member_to_remove = use_signal(|| Option::<OrganizationMember>::None);
+    let mut is_removing_member = use_signal(|| false);
 
     // Warning confirmation modal state for active tasks
     let mut pending_warning = use_signal(|| Option::<(String, PendingWarningAction)>::None);
@@ -72,12 +75,31 @@ pub fn OrganizationGovernorView(
     };
 
     // Handler to remove member
-    let handle_remove_member = move |uid: i64| {
-        spawn(async move {
-            if remove_organization_member(org_id, uid).await.is_ok() {
-                on_refresh.call(());
-            }
-        });
+    let handle_confirm_remove_member = move || {
+        if let Some(m) = member_to_remove.read().clone() {
+            let uid = m.user_id;
+            is_removing_member.set(true);
+            spawn(async move {
+                match remove_organization_member(org_id, uid, false).await {
+                    Ok(_) => {
+                        is_removing_member.set(false);
+                        member_to_remove.set(None);
+                        on_refresh.call(());
+                    }
+                    Err(e) => {
+                        is_removing_member.set(false);
+                        member_to_remove.set(None);
+                        let err_str = e.to_string();
+                        if err_str.contains("Active task impact warning") {
+                            pending_warning.set(Some((
+                                err_str,
+                                PendingWarningAction::RevokeMember { user_id: uid },
+                            )));
+                        }
+                    }
+                }
+            });
+        }
     };
 
     // Handler to cancel pending invitation
@@ -96,6 +118,9 @@ pub fn OrganizationGovernorView(
                 match action {
                     PendingWarningAction::RevokeRole { user_id, role } => {
                         let _ = revoke_organization_member_role(org_id, user_id, role, true).await;
+                    }
+                    PendingWarningAction::RevokeMember { user_id } => {
+                        let _ = remove_organization_member(org_id, user_id, true).await;
                     }
                 }
                 is_warning_loading.set(false);
@@ -304,12 +329,17 @@ pub fn OrganizationGovernorView(
                                                 "+ Assign Role"
                                             }
                                             if !is_gov {
-                                                button {
-                                                    r#type: "button",
-                                                    class: "btn-action-sm",
-                                                    style: "color: var(--danger); border-color: var(--danger);",
-                                                    onclick: move |_| handle_remove_member(uid),
-                                                    "Remove"
+                                                {
+                                                    let m_for_remove = m.clone();
+                                                    rsx! {
+                                                        button {
+                                                            r#type: "button",
+                                                            class: "btn-action-sm",
+                                                            style: "color: var(--danger); border-color: var(--danger);",
+                                                            onclick: move |_| member_to_remove.set(Some(m_for_remove.clone())),
+                                                            "Remove"
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -386,6 +416,15 @@ pub fn OrganizationGovernorView(
                             "Delete Organization"
                         }
                     }
+                }
+            }
+
+            if let Some(m) = member_to_remove.read().clone() {
+                ConfirmRemoveMemberModal {
+                    member_name: m.user_name.clone(),
+                    on_close: move |_| member_to_remove.set(None),
+                    on_confirm: handle_confirm_remove_member,
+                    is_loading: *is_removing_member.read(),
                 }
             }
 

@@ -2,8 +2,8 @@ use dioxus::prelude::*;
 use crate::Route;
 use crate::components::column_selector::ColumnSelector;
 use crate::backend::app_endpoints::{
-    assign_task, delete_task, get_my_tasks, get_project, get_project_tasks,
-    get_users, set_task_status, unassign_task,
+    assign_task, delete_task, get_my_project_member, get_my_tasks, get_project,
+    get_project_assignable_users, get_project_tasks, set_task_status, unassign_task,
 };
 use crate::types::TaskStatus;
 use super::column::TaskColumn;
@@ -32,14 +32,22 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
 
     let project_resource = use_server_future(move || async move {
         if let Some(p) = pid {
-            get_project(p).await.ok()
+            get_project(p).await.map(Some)
+        } else {
+            Ok(None)
+        }
+    })?;
+
+    let membership_resource = use_server_future(move || async move {
+        if let Some(p) = pid {
+            get_my_project_member(p).await.ok().flatten()
         } else {
             None
         }
     })?;
 
-    let users_resource = use_server_future(|| async move {
-        get_users().await
+    let assignable_users_resource = use_server_future(move || async move {
+        get_project_assignable_users(pid).await
     })?;
 
     let mut task_list = use_signal(|| {
@@ -50,7 +58,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     });
 
     let mut all_users = use_signal(|| {
-        match &*users_resource.read() {
+        match &*assignable_users_resource.read() {
             Some(Ok(list)) => list.clone(),
             _ => Vec::new(),
         }
@@ -63,7 +71,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     });
 
     use_effect(move || {
-        if let Some(Ok(list)) = &*users_resource.read() {
+        if let Some(Ok(list)) = &*assignable_users_resource.read() {
             all_users.set(list.clone());
         }
     });
@@ -121,16 +129,46 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     let current_users = all_users();
 
     let project_info = match &*project_resource.read() {
-        Some(Some(proj)) => Some(proj.clone()),
+        Some(Ok(Some(proj))) => Some(proj.clone()),
         _ => None,
+    };
+
+    let my_membership = match &*membership_resource.read() {
+        Some(Some(m)) => Some(m.clone()),
+        _ => None,
+    };
+
+    // For standalone tasks (pid.is_none()), any authenticated user can create/edit tasks.
+    // For project tasks, the user must have PERM_EDIT_TASKS (bit 4) in permissions_mask.
+    let can_mutate = if pid.is_some() {
+        my_membership.as_ref().map(|m| (m.permissions_mask & 4) != 0).unwrap_or(false)
+    } else {
+        true
     };
 
     rsx! {
         div { class: "task-view",
-            div { class: "task-view-topbar",
-                div {
-                    if let Some(proj) = &project_info {
-                        h1 { class: "task-view-title", "{proj.name}" }
+            if let Some(Err(err)) = &*project_resource.read() {
+                div { class: "dashboard-panel", style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
+                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);", "Access Denied" }
+                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);", "{err}" }
+                    div { style: "margin-top: 16px;",
+                        Link { to: Route::TasksDashboardPage {}, class: "btn-back-link", "← Return to My Tasks" }
+                    }
+                }
+            } else if let Some(Err(err)) = &*tasks_resource.read() {
+                div { class: "dashboard-panel", style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
+                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);", "Access Denied" }
+                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);", "{err}" }
+                    div { style: "margin-top: 16px;",
+                        Link { to: Route::TasksDashboardPage {}, class: "btn-back-link", "← Return to My Tasks" }
+                    }
+                }
+            } else {
+                div { class: "task-view-topbar",
+                    div {
+                        if let Some(proj) = &project_info {
+                            h1 { class: "task-view-title", "{proj.name}" }
                         div { style: "display: flex; gap: 8px; align-items: center; margin-top: 4px;",
                             span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
                                 "Led by "
@@ -155,7 +193,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                 }
 
                 div { style: "display: flex; gap: 10px; align-items: center;",
-                    if pid.is_some() {
+                    if pid.is_some() && can_mutate {
                         button {
                             r#type: "button",
                             class: "btn-task-cancel",
@@ -192,15 +230,17 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                             "🗑 Delete Project"
                         }
                     }
-                    button {
-                        r#type: "button",
-                        class: "btn-create-task",
-                        onclick: move |_| {
-                            let curr = *show_new_task.read();
-                            show_new_task.set(!curr);
-                        },
-                        span { class: "btn-create-icon", "+" }
-                        " New Task"
+                    if can_mutate {
+                        button {
+                            r#type: "button",
+                            class: "btn-create-task",
+                            onclick: move |_| {
+                                let curr = *show_new_task.read();
+                                show_new_task.set(!curr);
+                            },
+                            span { class: "btn-create-icon", "+" }
+                            " New Task"
+                        }
                     }
                 }
             }
@@ -320,6 +360,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                                 status,
                                 tasks: current_tasks.clone(),
                                 all_users: current_users.clone(),
+                                can_mutate,
                                 on_dismiss: on_dismiss_handler,
                                 on_status_change: on_status_change_handler,
                                 on_assign: on_assign_handler,
@@ -331,5 +372,6 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
             }
         }
     }
+}
 }
 

@@ -1,5 +1,8 @@
 use dioxus::prelude::*;
-use crate::backend::app_endpoints::{get_task, get_task_messages, get_users, post_task_message, update_task};
+use crate::backend::app_endpoints::{
+    get_my_project_member, get_project_assignable_users, get_task, get_task_messages,
+    post_task_message, update_task,
+};
 use crate::components::assignee_search::{AssigneeBadgeList, AssigneeSearchDropdown};
 use crate::components::status_select::TaskStatusSelect;
 use crate::types::{Task, TaskStatus, User};
@@ -11,13 +14,45 @@ pub fn TaskPage(id: i64) -> Element {
         get_task(id).await
     })?;
 
-    let users_resource = use_server_future(move || async move {
-        get_users().await
-    })?;
-
     let mut messages_resource = use_server_future(move || async move {
         get_task_messages(id).await
     })?;
+
+    let task_read = task_resource.read();
+    let current_task = match &*task_read {
+        Some(Ok(t)) => Some(t.clone()),
+        _ => None,
+    };
+
+    let pid = current_task.as_ref().map(|t| t.project_id);
+
+    let users_resource = use_server_future(move || async move {
+        get_project_assignable_users(pid).await
+    })?;
+
+    let my_membership_resource = use_server_future(move || async move {
+        match pid {
+            Some(p) => get_my_project_member(p).await.unwrap_or(None),
+            None => None,
+        }
+    })?;
+
+    let my_membership = match &*my_membership_resource.read() {
+        Some(Some(m)) => Some(m.clone()),
+        _ => None,
+    };
+
+    let can_edit = if pid.is_some() {
+        my_membership.as_ref().map(|m| (m.permissions_mask & 4) != 0).unwrap_or(false)
+    } else {
+        true
+    };
+
+    let can_comment = if pid.is_some() {
+        my_membership.as_ref().map(|m| (m.permissions_mask & 2) != 0).unwrap_or(false)
+    } else {
+        true
+    };
 
     let mut is_editing = use_signal(|| false);
     let mut edit_title = use_signal(String::new);
@@ -30,12 +65,6 @@ pub fn TaskPage(id: i64) -> Element {
     let mut new_message_text = use_signal(String::new);
     let mut is_posting_message = use_signal(|| false);
     let mut message_error = use_signal(|| Option::<String>::None);
-
-    let task_read = task_resource.read();
-    let current_task = match &*task_read {
-        Some(Ok(t)) => Some(t.clone()),
-        _ => None,
-    };
 
     let all_users = match &*users_resource.read() {
         Some(Ok(users)) => users.clone(),
@@ -185,14 +214,16 @@ pub fn TaskPage(id: i64) -> Element {
                                 span { class: "task-detail-status status-{task.status.as_str()}",
                                     "{task.status}"
                                 }
-                                button {
-                                    r#type: "button",
-                                    class: "btn-task-edit",
-                                    onclick: {
-                                        let t = task.clone();
-                                        move |_| start_editing(&t)
-                                    },
-                                    "✎ Edit Task"
+                                if can_edit {
+                                    button {
+                                        r#type: "button",
+                                        class: "btn-task-edit",
+                                        onclick: {
+                                            let t = task.clone();
+                                            move |_| start_editing(&t)
+                                        },
+                                        "✎ Edit Task"
+                                    }
                                 }
                             }
                         }
@@ -212,6 +243,7 @@ pub fn TaskPage(id: i64) -> Element {
                             label { class: "section-title", "Status" }
                             TaskStatusSelect {
                                 status: *edit_status.read(),
+                                can_mutate: true,
                                 on_change: move |new_st| edit_status.set(new_st),
                             }
                         }
@@ -231,6 +263,7 @@ pub fn TaskPage(id: i64) -> Element {
                             AssigneeBadgeList {
                                 assignees: edit_assignees.read().clone(),
                                 task_title: edit_title.read().clone(),
+                                can_mutate: true,
                                 on_unassign: move |uid| {
                                     edit_assignees.write().retain(|u| u.id != uid);
                                 },
@@ -302,32 +335,47 @@ pub fn TaskPage(id: i64) -> Element {
                         }
                     }
 
-                    div { class: "task-message-composer",
-                        if let Some(err) = &*message_error.read() {
-                            div {
-                                class: "task-detail-error",
-                                style: "padding: 8px 12px;",
-                                "{err}"
+                    if can_comment {
+                        div { class: "task-message-composer",
+                            if let Some(err) = &*message_error.read() {
+                                div {
+                                    class: "task-detail-error",
+                                    style: "padding: 8px 12px;",
+                                    "{err}"
+                                }
+                            }
+                            textarea {
+                                class: "task-message-input",
+                                placeholder: "Write a message or update on this task...",
+                                value: "{new_message_text}",
+                                oninput: move |e| new_message_text.set(e.value()),
+                                disabled: *is_posting_message.read(),
+                            }
+                            button {
+                                r#type: "button",
+                                class: "btn-post-message",
+                                disabled: *is_posting_message.read(),
+                                onclick: handle_post_message,
+                                if *is_posting_message.read() {
+                                    "Posting..."
+                                } else {
+                                    "Post Message"
+                                }
                             }
                         }
-                        textarea {
-                            class: "task-message-input",
-                            placeholder: "Write a message or update on this task...",
-                            value: "{new_message_text}",
-                            oninput: move |e| new_message_text.set(e.value()),
-                            disabled: *is_posting_message.read(),
+                    } else {
+                        div {
+                            style: "padding: 12px 16px; background-color: var(--bg-surface-raised); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); color: var(--text-muted); font-size: var(--font-size-body-sm); margin-top: 12px;",
+                            "You have read-only access and cannot post messages in this project discussion."
                         }
-                        button {
-                            r#type: "button",
-                            class: "btn-post-message",
-                            disabled: *is_posting_message.read(),
-                            onclick: handle_post_message,
-                            if *is_posting_message.read() {
-                                "Posting..."
-                            } else {
-                                "Post Message"
-                            }
-                        }
+                    }
+                }
+            } else if let Some(Err(err)) = &*task_resource.read() {
+                div { class: "dashboard-panel", style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
+                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);", "Access Denied" }
+                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);", "{err}" }
+                    div { style: "margin-top: 16px;",
+                        Link { to: Route::TasksDashboardPage {}, class: "btn-back-link", "← Return to My Tasks" }
                     }
                 }
             } else {

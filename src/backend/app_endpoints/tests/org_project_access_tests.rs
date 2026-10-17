@@ -1,4 +1,7 @@
+use crate::backend::app_endpoints::auth::{reset_test_auth_user, set_test_auth_user};
+use crate::backend::app_endpoints::*;
 use crate::backend::database::get_db;
+use crate::types::{TaskStatus, User};
 
 #[tokio::test]
 async fn test_multi_role_potato_people_and_additive_privileges() {
@@ -566,5 +569,459 @@ async fn test_active_tasks_preflight_warning_and_handover() {
         .execute(pool)
         .await;
     assert!(unassign_err.is_err(), "Trigger should prevent unassigning the last assignee from an in-progress task");
+}
+
+#[tokio::test]
+async fn test_standalone_and_project_task_assignment_permissions() {
+    let pool = get_db().await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+
+    // 1. Create a project
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, leader_id) VALUES ($1, 'Role Assignment Test', 1) RETURNING id",
+    )
+    .bind(format!("Role Assignment Proj - {}", now))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // Alice=1 is admin (63)
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+        .bind(proj_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Bob=2 is member (15, has bit 4)
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 2, 'member', 15)")
+        .bind(proj_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Charlie=3 is viewer (3, bit 1 + 2, lacks bit 4)
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 3, 'viewer', 3)")
+        .bind(proj_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Create a project task in 'accepted' status (tasks must be at least 'accepted' to be assigned!)
+    let task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, author, status) VALUES ($1, 'Assignment Test Task', 1, 'accepted') RETURNING id",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // 2. Assigning Bob=2 (member, has bit 4) should succeed
+    let assign_member = sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, 2)")
+        .bind(task_id)
+        .execute(pool)
+        .await;
+    assert!(assign_member.is_ok(), "Assigning a project member with task execution permissions should succeed");
+
+    // 3. Assigning Charlie=3 (viewer, lacks bit 4) should FAIL due to check_assignment_permission trigger
+    let assign_viewer = sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, 3)")
+        .bind(task_id)
+        .execute(pool)
+        .await;
+    assert!(assign_viewer.is_err(), "Assigning a viewer without task execution permissions must fail");
+
+    // 4. Assigning a non-member (e.g. Diana=4) should also FAIL
+    let assign_non_member = sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, 4)")
+        .bind(task_id)
+        .execute(pool)
+        .await;
+    assert!(assign_non_member.is_err(), "Assigning a non-member to a project task must fail");
+}
+
+#[tokio::test]
+async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
+    let pool = get_db().await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+
+    // Reset test auth user at start and end
+    reset_test_auth_user();
+
+    // 1. Setup Organization & Project
+    let org_id: i64 = sqlx::query_scalar(
+        "INSERT INTO organization (name, slug, governing_user_id) VALUES ($1, $2, 1) RETURNING id",
+    )
+    .bind(format!("Org Auth Test {}", now))
+    .bind(format!("org-auth-{}", now))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, owner_org_id, leader_id) VALUES ($1, 'Auth Project', $2, 1) RETURNING id",
+    )
+    .bind(format!("Auth Proj {}", now))
+    .bind(org_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // Alice is leader/admin
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+        .bind(proj_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Add roles to org: 'member', 'developer', 'auditor'
+    sqlx::query("INSERT INTO organization_role (organization_id, role) VALUES ($1, 'developer'), ($1, 'auditor')")
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Map org roles to project roles:
+    // 'member' -> 'member' (mask 15)
+    // 'developer' -> 'viewer' (mask 1)
+    // 'auditor' has NO rule mapping!
+    sqlx::query(
+        "INSERT INTO project_org_role_access (project_id, organization_id, org_role, project_role)
+         VALUES ($1, $2, 'member', 'member'), ($1, $2, 'developer', 'viewer')",
+    )
+    .bind(proj_id)
+    .bind(org_id)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Create a task in the project
+    let task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, 'Initial Task', 'Details', 1, 'accepted') RETURNING id",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // 2. Add Bob (user 2) with role 'member'
+    sqlx::query("INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, 2, 'member')")
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Bob has 'member' role, so Bob is in project_members with mask 15
+    let (bob_role, bob_mask): (String, i64) = sqlx::query_as(
+        "SELECT role, permissions_mask FROM project_members WHERE project_id = $1 AND user_id = 2",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(bob_role, "member");
+    assert_eq!(bob_mask, 15);
+
+    // Bob can read tasks, and can be assigned
+    sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, 2)")
+        .bind(task_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let bob_task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, 'Bob Authored Task', 'Desc', 2, 'accepted') RETURNING id",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    set_test_auth_user(Some(User { id: 2, name: "Bob Smith".to_string(), email: "bob@example.com".to_string() }));
+    let bob_tasks = get_project_tasks(proj_id, None, 10).await;
+    assert!(bob_tasks.is_ok(), "Bob should be able to view project tasks as member");
+
+    let bob_my_tasks_before = get_my_tasks(None, 100).await.unwrap();
+    assert!(bob_my_tasks_before.iter().any(|t| t.id == task_id));
+    assert!(bob_my_tasks_before.iter().any(|t| t.id == bob_task_id));
+
+    // 3. Demote Bob to 'auditor' (a role with no project mapping!)
+    sqlx::query("UPDATE organization_members SET role = 'auditor' WHERE organization_id = $1 AND user_id = 2")
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Bob should now be completely removed from project_members!
+    let bob_in_proj: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = 2")
+        .bind(proj_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(bob_in_proj, 0, "Demoted Bob must be removed from project_members");
+
+    // Bob's assignments on this project must be purged!
+    let bob_assigned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE assigned_to = 2 AND task_id = $1")
+        .bind(task_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(bob_assigned, 0, "Bob assignments on project tasks must be purged upon demotion");
+
+    // In 'my tasks', Bob must NOT see old tasks from the revoked project!
+    let bob_my_tasks_after = get_my_tasks(None, 100).await.unwrap();
+    assert!(!bob_my_tasks_after.iter().any(|t| t.id == task_id), "Revoked project task must not persist in my tasks");
+    assert!(!bob_my_tasks_after.iter().any(|t| t.id == bob_task_id), "Revoked authored project task must not persist in my tasks");
+
+    // Bob tries to get project tasks -> Access Denied!
+    let bob_tasks_after = get_project_tasks(proj_id, None, 10).await;
+    assert!(bob_tasks_after.is_err(), "Demoted Bob must be denied access to project tasks");
+
+    // Bob tries to get the task -> Access Denied!
+    let bob_task_after = get_task(task_id).await;
+    assert!(bob_task_after.is_err(), "Demoted Bob must be denied access to view project task");
+
+    // Alice tries to assign demoted Bob to the task -> Must fail!
+    set_test_auth_user(Some(User { id: 1, name: "Alice Johnson".to_string(), email: "alice@example.com".to_string() }));
+    let assign_bob = assign_task(task_id, 2).await;
+    assert!(assign_bob.is_err(), "Cannot assign task to user lacking project execution permissions");
+
+    let update_assign_bob = update_task(task_id, "Title".to_string(), "Desc".to_string(), TaskStatus::Accepted, vec![2]).await;
+    assert!(update_assign_bob.is_err(), "update_task cannot assign user lacking project execution permissions");
+
+    // 4. Test Charlie (user 3) as 'developer' (mapped to 'viewer', mask 1)
+    sqlx::query("INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, 3, 'developer')")
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let (charlie_role, charlie_mask): (String, i64) = sqlx::query_as(
+        "SELECT role, permissions_mask FROM project_members WHERE project_id = $1 AND user_id = 3",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(charlie_role, "viewer");
+    assert_eq!(charlie_mask, 1);
+
+    // Charlie can read tasks
+    set_test_auth_user(Some(User { id: 3, name: "Charlie Brown".to_string(), email: "charlie@example.com".to_string() }));
+    let charlie_tasks = get_project_tasks(proj_id, None, 10).await;
+    assert!(charlie_tasks.is_ok(), "Viewer can view tasks");
+
+    let charlie_task = get_task(task_id).await;
+    assert!(charlie_task.is_ok(), "Viewer can view task details");
+
+    // Charlie CANNOT create tasks
+    let charlie_create = suggest_task_for_project(proj_id, "Illegal Task".to_string(), "Desc".to_string()).await;
+    assert!(charlie_create.is_err(), "Viewer cannot create tasks");
+
+    // Charlie CANNOT edit tasks
+    let charlie_update = update_task(task_id, "Mutated Title".to_string(), "Desc".to_string(), TaskStatus::Accepted, vec![]).await;
+    assert!(charlie_update.is_err(), "Viewer cannot update task details");
+
+    // Charlie CANNOT change task status
+    let charlie_status = set_task_status(task_id as u64, TaskStatus::Finished).await;
+    assert!(charlie_status.is_err(), "Viewer cannot change task status");
+
+    // Charlie CANNOT post messages
+    let charlie_msg = post_task_message(task_id, "Viewer message".to_string()).await;
+    assert!(charlie_msg.is_err(), "Viewer cannot post messages");
+
+    // 5. Test Ian (user 9) as completely new member with unmapped role 'auditor'
+    sqlx::query("INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, 9, 'auditor')")
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    set_test_auth_user(Some(User { id: 9, name: "Ian Malcolm".to_string(), email: "ian@example.com".to_string() }));
+    let ian_affils = get_organization_affiliated_projects(org_id).await.unwrap();
+    // Zero-knowledge: Ian Malcolm has no qualifying role, so the confidential project is completely omitted
+    assert_eq!(ian_affils.len(), 0, "Ian has no view access, so project is not returned from backend");
+
+    let ian_tasks = get_project_tasks(proj_id, None, 10).await;
+    assert!(ian_tasks.is_err(), "Ian cannot download tasks without project permissions");
+
+    let ian_task = get_task(task_id).await;
+    assert!(ian_task.is_err(), "Ian cannot view task without project permissions");
+
+    let ian_role_rules = get_organization_role_rules(org_id).await;
+    assert!(ian_role_rules.is_err(), "Ian cannot view organization role rules");
+
+    let ian_proj_orgs = get_project_organizations(proj_id).await;
+    assert!(ian_proj_orgs.is_err(), "Ian cannot inspect project organization affiliations");
+
+    // Charlie has role 'developer' mapped to 'viewer', so Charlie DOES receive the project
+    set_test_auth_user(Some(User { id: 3, name: "Charlie Brown".to_string(), email: "charlie@example.com".to_string() }));
+    let charlie_affils = get_organization_affiliated_projects(org_id).await.unwrap();
+    assert_eq!(charlie_affils.len(), 1, "Charlie has viewer role, so project is visible");
+    assert!(charlie_affils[0].has_access);
+
+    // Demoted Bob (auditor, unmapped) also receives 0 projects
+    set_test_auth_user(Some(User { id: 2, name: "Bob Smith".to_string(), email: "bob@example.com".to_string() }));
+    let bob_affils = get_organization_affiliated_projects(org_id).await.unwrap();
+    assert_eq!(bob_affils.len(), 0, "Demoted Bob has no view access, so project is not returned");
+
+    // 6. Test Trigger: Dynamic Rule Update upgrades Charlie from 'viewer' to 'member'
+    sqlx::query(
+        "UPDATE project_org_role_access SET project_role = 'member'
+         WHERE project_id = $1 AND organization_id = $2 AND org_role = 'developer'",
+    )
+    .bind(proj_id)
+    .bind(org_id)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Trigger sync_grants_after_rule_update automatically updated Charlie in project_members!
+    let (upgraded_role, upgraded_mask): (String, i64) = sqlx::query_as(
+        "SELECT role, permissions_mask FROM project_members WHERE project_id = $1 AND user_id = 3",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(upgraded_role, "member");
+    assert_eq!(upgraded_mask, 15);
+
+    // Now Charlie CAN update tasks!
+    set_test_auth_user(Some(User { id: 3, name: "Charlie Brown".to_string(), email: "charlie@example.com".to_string() }));
+    let charlie_update_ok = update_task(task_id, "Legitimate Member Edit".to_string(), "New Desc".to_string(), TaskStatus::Accepted, vec![]).await;
+    assert!(charlie_update_ok.is_ok(), "Upgraded member can now update tasks");
+
+    reset_test_auth_user();
+}
+
+#[tokio::test]
+async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments() {
+    let pool = get_db().await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+
+    // 1. Create Organization & Project
+    let org_id: i64 = sqlx::query_scalar(
+        "INSERT INTO organization (name, slug, governing_user_id) VALUES ($1, $2, 1) RETURNING id",
+    )
+    .bind(format!("Org Revoke Test {}", now))
+    .bind(format!("org-rev-{}", now))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, owner_org_id, leader_id) VALUES ($1, 'Revoke Proj', $2, 1) RETURNING id",
+    )
+    .bind(format!("Revoke Proj {}", now))
+    .bind(org_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // Alice is leader
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+        .bind(proj_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Add role rule: 'member' -> 'member'
+    sqlx::query(
+        "INSERT INTO project_org_role_access (project_id, organization_id, org_role, project_role)
+         VALUES ($1, $2, 'member', 'member')",
+    )
+    .bind(proj_id)
+    .bind(org_id)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Enroll Bob (user 2) into the organization as 'member'
+    sqlx::query("INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, 2, 'member')")
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Verify Bob is materialized into project_members
+    let (bob_pm_role, bob_pm_mask): (String, i64) = sqlx::query_as(
+        "SELECT role, permissions_mask FROM project_members WHERE project_id = $1 AND user_id = 2",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(bob_pm_role, "member");
+    assert_eq!(bob_pm_mask, 15);
+
+    // Create a task and assign Bob
+    let task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, 'Feature Implementation', 'Code', 1, 'assigned') RETURNING id",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, 2)")
+        .bind(task_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Alice revokes 'member' access WITHOUT confirmation -> Warning error!
+    set_test_auth_user(Some(User { id: 1, name: "Alice Johnson".to_string(), email: "alice@example.com".to_string() }));
+    let revoke_warn = revoke_org_role_project_access(proj_id, org_id, "member".to_string(), false).await;
+    assert!(revoke_warn.is_err(), "Must warn before revoking rule affecting active tasks");
+    let warn_msg = revoke_warn.unwrap_err().to_string();
+    assert!(warn_msg.contains("Active task impact warning"), "Message should mention impact warning: {}", warn_msg);
+    assert!(warn_msg.contains("Bob Smith"), "Message should mention Bob Smith: {}", warn_msg);
+
+    // Alice confirms warning -> Revocation succeeds!
+    let revoke_ok = revoke_org_role_project_access(proj_id, org_id, "member".to_string(), true).await;
+    assert!(revoke_ok.is_ok(), "Revocation should succeed with confirmation");
+
+    // Verify Bob is completely purged from project_member_grants
+    let grants_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM project_member_grants WHERE project_id = $1 AND user_id = 2",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(grants_count, 0, "Bob must have 0 grants after role rule revocation");
+
+    // Verify Bob is completely purged from project_members!
+    let pm_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = 2",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(pm_count, 0, "Bob must be removed from project_members table after rule revocation");
+
+    // Verify Bob does NOT appear in get_project_members endpoint
+    let members = get_project_members(proj_id).await.unwrap();
+    assert!(!members.iter().any(|m| m.user_id == 2), "Bob must not show up in get_project_members table");
+
+    // Verify Bob does NOT appear in get_project_assignable_users endpoint
+    let assignable = get_project_assignable_users(Some(proj_id)).await.unwrap();
+    assert!(!assignable.iter().any(|u| u.id == 2), "Bob must not show up in assignable users");
+
+    // Verify Bob's assignment was cleanly deleted
+    let task_assignees: Vec<i64> = sqlx::query_scalar(
+        "SELECT assigned_to FROM assignments WHERE task_id = $1",
+    )
+    .bind(task_id)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(!task_assignees.contains(&2), "Bob must be unassigned from project task");
+
+    // Verify Bob does NOT see the task in get_my_tasks
+    set_test_auth_user(Some(User { id: 2, name: "Bob Smith".to_string(), email: "bob@example.com".to_string() }));
+    let bob_tasks = get_my_tasks(None, 100).await.unwrap();
+    assert!(!bob_tasks.iter().any(|t| t.id == task_id), "Revoked user must not see project task in my tasks");
+
+    reset_test_auth_user();
 }
 

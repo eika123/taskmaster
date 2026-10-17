@@ -189,6 +189,7 @@ pub async fn get_organization_members(
 pub async fn remove_organization_member(
     organization_id: i64,
     member_user_id: i64,
+    confirm_active_tasks_warning: bool,
 ) -> Result<(), ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
@@ -206,14 +207,91 @@ pub async fn remove_organization_member(
         ));
     }
 
+    #[derive(sqlx::FromRow)]
+    struct ImpactRow {
+        task_id: i64,
+        task_title: String,
+        status: String,
+        project_name: String,
+    }
+
+    // Check if removing this member from the org will strip task permissions on active project tasks
+    let impacts: Vec<ImpactRow> = sqlx::query_as(
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, p.name AS project_name
+         FROM project_member_grants pmg
+         JOIN project p ON p.id = pmg.project_id
+         JOIN assignments a ON a.assigned_to = $1
+         JOIN task t ON t.id = a.task_id AND t.project_id = p.id
+         WHERE pmg.source_org_id = $2
+           AND pmg.user_id = $1
+           AND t.status != 'finished'
+           AND NOT EXISTS (
+               SELECT 1 FROM project_member_grants other
+               JOIN project_role_definition prd ON prd.role = other.project_role
+               WHERE other.project_id = p.id
+                 AND other.user_id = $1
+                 AND other.source_org_id != $2
+                 AND (prd.permissions_mask & 4) != 0
+           )",
+    )
+    .bind(member_user_id)
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Impact check failed: {e}")))?;
+
+    if !impacts.is_empty() && !confirm_active_tasks_warning {
+        let details: Vec<String> = impacts
+            .iter()
+            .map(|r| format!("Project '{}' task '{}' [{}]", r.project_name, r.task_title, r.status))
+            .collect();
+        return Err(ServerFnError::new(format!(
+            "Active task impact warning: Removing this member will revoke task privileges on active tasks: {}. Confirm to proceed or hand over tasks first.",
+            details.join("; ")
+        )));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
+
+    // If confirmed, unassign from affected non-finished tasks so DB constraints don't fail
+    for impact in &impacts {
+        if impact.status == "in_progress" {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
+                .bind(impact.task_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
+            if count <= 1 {
+                sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
+                    .bind(impact.task_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+            }
+        }
+        sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
+            .bind(impact.task_id)
+            .bind(member_user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to clean up assignment: {e}")))?;
+    }
+
     // The database trigger `prevent_remove_governing_user` will automatically block
     // the governing user from removing themselves unless governance is transferred first!
     sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
         .bind(organization_id)
         .bind(member_user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ServerFnError::new(format!("Cannot remove member: {e}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Commit failed: {e}")))?;
 
     Ok(())
 }
@@ -519,14 +597,26 @@ pub async fn revoke_organization_member_role(
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
     for imp in &impacts {
-        if imp.status != "in_progress" {
-            sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
+        if imp.status == "in_progress" {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
                 .bind(imp.task_id)
-                .bind(member_user_id)
-                .execute(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await
-                .map_err(|e| ServerFnError::new(format!("Failed to unassign task: {e}")))?;
+                .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
+            if count <= 1 {
+                sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
+                    .bind(imp.task_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+            }
         }
+        sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
+            .bind(imp.task_id)
+            .bind(member_user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to unassign task: {e}")))?;
     }
 
     sqlx::query("DELETE FROM organization_member_roles WHERE organization_id = $1 AND user_id = $2 AND role = $3")
@@ -640,18 +730,86 @@ pub async fn get_organization(organization_id: i64) -> Result<Organization, Serv
 pub async fn get_organization_affiliated_projects(
     organization_id: i64,
 ) -> Result<Vec<OrgProjectAffiliation>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
-    let projects = sqlx::query_as::<_, OrgProjectAffiliation>(
-        "SELECT po.project_id, p.name AS project_name, po.relationship_type, po.max_granted_role
+
+    // Check if the caller is the governor or admin of this organization
+    let is_org_governor_or_admin: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM organization o
+            WHERE o.id = $1 AND (
+                o.governing_user_id = $2
+                OR EXISTS (
+                    SELECT 1 FROM organization_member_roles omr
+                    WHERE omr.organization_id = o.id AND omr.user_id = $2 AND omr.role = 'admin'
+                )
+            )
+        )",
+    )
+    .bind(organization_id)
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to verify org permissions: {e}")))?;
+
+    #[derive(sqlx::FromRow)]
+    struct RawAffiliation {
+        project_id: i64,
+        project_name: String,
+        relationship_type: String,
+        max_granted_role: String,
+        is_leader: bool,
+        member_role: Option<String>,
+        permissions_mask: Option<i64>,
+    }
+
+    // Zero-knowledge / Need-to-know filtering:
+    // If the caller is not governor/admin of the organization, ONLY return projects
+    // where the caller is the leader or has active read access (permissions_mask & 1 != 0).
+    let rows = sqlx::query_as::<_, RawAffiliation>(
+        "SELECT po.project_id, p.name AS project_name, po.relationship_type, po.max_granted_role,
+                (p.leader_id = $2) AS is_leader,
+                pm.role AS member_role,
+                pm.permissions_mask
          FROM project_organizations po
          INNER JOIN project p ON po.project_id = p.id
+         LEFT JOIN project_members pm ON pm.project_id = po.project_id AND pm.user_id = $2
          WHERE po.organization_id = $1
+           AND (
+               p.leader_id = $2
+               OR (pm.permissions_mask & 1) != 0
+               OR $3 = 1
+           )
          ORDER BY p.name ASC",
     )
     .bind(organization_id)
+    .bind(user.id)
+    .bind(is_org_governor_or_admin)
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch affiliated projects: {e}")))?;
+
+    let projects = rows
+        .into_iter()
+        .map(|r| {
+            let has_access = r.is_leader
+                || r.permissions_mask.map(|m| (m & 1) != 0).unwrap_or(false)
+                || is_org_governor_or_admin;
+            let user_role = if r.is_leader {
+                Some("Leader".to_string())
+            } else {
+                r.member_role
+            };
+            OrgProjectAffiliation {
+                project_id: r.project_id,
+                project_name: r.project_name,
+                relationship_type: r.relationship_type,
+                max_granted_role: r.max_granted_role,
+                has_access,
+                user_role,
+            }
+        })
+        .collect();
 
     Ok(projects)
 }
@@ -660,7 +818,31 @@ pub async fn get_organization_affiliated_projects(
 pub async fn get_organization_role_rules(
     organization_id: i64,
 ) -> Result<Vec<OrgRoleRuleItem>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let is_governor_or_admin: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM organization o
+            WHERE o.id = $1 AND (
+                o.governing_user_id = $2
+                OR EXISTS (
+                    SELECT 1 FROM organization_member_roles omr
+                    WHERE omr.organization_id = o.id AND omr.user_id = $2 AND omr.role = 'admin'
+                )
+            )
+        )",
+    )
+    .bind(organization_id)
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to verify permissions: {e}")))?;
+
+    if !is_governor_or_admin {
+        return Err(ServerFnError::new("You do not have permission to view organization role rules."));
+    }
+
     let rules = sqlx::query_as::<_, OrgRoleRuleItem>(
         "SELECT pora.project_id, p.name AS project_name, pora.organization_id, pora.org_role, pora.project_role
          FROM project_org_role_access pora
@@ -680,7 +862,31 @@ pub async fn get_organization_role_rules(
 pub async fn get_organization_pending_invitations(
     organization_id: i64,
 ) -> Result<Vec<OrganizationPendingInvite>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let is_governor_or_admin: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM organization o
+            WHERE o.id = $1 AND (
+                o.governing_user_id = $2
+                OR EXISTS (
+                    SELECT 1 FROM organization_member_roles omr
+                    WHERE omr.organization_id = o.id AND omr.user_id = $2 AND omr.role = 'admin'
+                )
+            )
+        )",
+    )
+    .bind(organization_id)
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to verify permissions: {e}")))?;
+
+    if !is_governor_or_admin {
+        return Ok(Vec::new());
+    }
+
     let invites = sqlx::query_as::<_, OrganizationPendingInvite>(
         "SELECT oi.organization_id, oi.invited_user_id, u.name AS invited_user_name,
                 u.email AS invited_user_email, oi.role, oi.message, oi.created_at

@@ -136,6 +136,9 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         if !has_org_role {
             let _ = sqlx::query("DROP TABLE IF EXISTS project_org_role_access").execute(pool).await;
         }
+
+        // Clean up any stale direct grant for Bob on Project 1
+        let _ = sqlx::query("DELETE FROM project_member_grants WHERE project_id = 1 AND user_id = 2 AND grant_key = 'direct'").execute(pool).await;
     }
 
     // 1. Create base tables
@@ -511,6 +514,22 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
             SELECT RAISE(ABORT, 'Granted project role exceeds the organization privilege ceiling for this project.');
         END;
 
+        -- Ceiling Check: Privilege ceiling enforcement when max_granted_role is updated on project_organizations
+        CREATE TRIGGER IF NOT EXISTS check_org_max_role_ceiling_update
+        BEFORE UPDATE OF max_granted_role ON project_organizations
+        FOR EACH ROW
+        WHEN EXISTS (
+            SELECT 1 FROM project_org_role_access pora
+            JOIN project_role_definition prd_grant ON prd_grant.role = pora.project_role
+            JOIN project_role_definition prd_ceiling ON prd_ceiling.role = NEW.max_granted_role
+            WHERE pora.project_id = NEW.project_id
+              AND pora.organization_id = NEW.organization_id
+              AND (prd_grant.permissions_mask & ~prd_ceiling.permissions_mask) != 0
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'Cannot lower organization privilege ceiling below existing role access rules. Update role rules first.');
+        END;
+
         -- Materialization: Synchronize grants when a rule is added to project_org_role_access
         CREATE TRIGGER IF NOT EXISTS sync_grants_after_rule_insert
         AFTER INSERT ON project_org_role_access
@@ -532,6 +551,75 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
               AND omr.role = NEW.org_role;
         END;
 
+        -- Materialization: Synchronize grants when a rule's project_role is updated in project_org_role_access
+        CREATE TRIGGER IF NOT EXISTS sync_grants_after_rule_update
+        AFTER UPDATE OF project_role ON project_org_role_access
+        FOR EACH ROW
+        BEGIN
+            UPDATE project_member_grants
+            SET project_role = NEW.project_role
+            WHERE project_id = NEW.project_id
+              AND source_org_id = NEW.organization_id
+              AND source_org_role = NEW.org_role;
+        END;
+
+        -- Materialization: Synchronize grants when a rule is removed from project_org_role_access
+        DROP TRIGGER IF EXISTS sync_grants_after_rule_delete;
+        CREATE TRIGGER sync_grants_after_rule_delete
+        AFTER DELETE ON project_org_role_access
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM project_member_grants
+            WHERE project_id = OLD.project_id
+              AND source_org_id = OLD.organization_id
+              AND source_org_role = OLD.org_role;
+
+            DELETE FROM project_members
+            WHERE project_id = OLD.project_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM project_member_grants
+                  WHERE project_id = OLD.project_id AND user_id = project_members.user_id
+              );
+
+            UPDATE project_members
+            SET
+                permissions_mask = (
+                    SELECT COALESCE(
+                        (SELECT prd.permissions_mask
+                         FROM project_member_grants pmg
+                         JOIN project_role_definition prd ON prd.role = pmg.project_role
+                         WHERE pmg.project_id = OLD.project_id
+                           AND pmg.user_id = project_members.user_id
+                           AND pmg.grant_key = project_members.active_grant_key),
+                        (SELECT (MAX(prd.permissions_mask & 1))
+                              | (MAX(prd.permissions_mask & 2))
+                              | (MAX(prd.permissions_mask & 4))
+                              | (MAX(prd.permissions_mask & 8))
+                              | (MAX(prd.permissions_mask & 16))
+                              | (MAX(prd.permissions_mask & 32))
+                         FROM project_member_grants pmg
+                         JOIN project_role_definition prd ON prd.role = pmg.project_role
+                         WHERE pmg.project_id = OLD.project_id AND pmg.user_id = project_members.user_id)
+                    )
+                ),
+                granted_by_org_role = CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM project_member_grants
+                        WHERE project_id = OLD.project_id AND user_id = project_members.user_id AND grant_key = 'direct'
+                    ) THEN 0
+                    ELSE 1
+                END
+            WHERE project_id = OLD.project_id;
+
+            UPDATE project_members
+            SET role = CASE
+                WHEN permissions_mask & 32 != 0 THEN 'admin'
+                WHEN permissions_mask & 4 != 0 THEN 'member'
+                ELSE 'viewer'
+            END
+            WHERE project_id = OLD.project_id;
+        END;
+
         -- Materialization: Synchronize grants when a user gains a role in organization_member_roles
         CREATE TRIGGER IF NOT EXISTS sync_grants_after_org_role_insert
         AFTER INSERT ON organization_member_roles
@@ -551,6 +639,83 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
             FROM project_org_role_access pora
             WHERE pora.organization_id = NEW.organization_id
               AND pora.org_role = NEW.role;
+        END;
+
+        -- Materialization: Synchronize grants when a user loses a role in organization_member_roles
+        DROP TRIGGER IF EXISTS sync_grants_after_org_role_delete;
+        CREATE TRIGGER sync_grants_after_org_role_delete
+        AFTER DELETE ON organization_member_roles
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM project_member_grants
+            WHERE source_org_id = OLD.organization_id
+              AND user_id = OLD.user_id
+              AND source_org_role = OLD.role;
+
+            DELETE FROM project_members
+            WHERE user_id = OLD.user_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM project_member_grants
+                  WHERE project_id = project_members.project_id AND user_id = OLD.user_id
+              );
+
+            UPDATE project_members
+            SET
+                permissions_mask = (
+                    SELECT COALESCE(
+                        (SELECT prd.permissions_mask
+                         FROM project_member_grants pmg
+                         JOIN project_role_definition prd ON prd.role = pmg.project_role
+                         WHERE pmg.project_id = project_members.project_id
+                           AND pmg.user_id = OLD.user_id
+                           AND pmg.grant_key = project_members.active_grant_key),
+                        (SELECT (MAX(prd.permissions_mask & 1))
+                              | (MAX(prd.permissions_mask & 2))
+                              | (MAX(prd.permissions_mask & 4))
+                              | (MAX(prd.permissions_mask & 8))
+                              | (MAX(prd.permissions_mask & 16))
+                              | (MAX(prd.permissions_mask & 32))
+                         FROM project_member_grants pmg
+                         JOIN project_role_definition prd ON prd.role = pmg.project_role
+                         WHERE pmg.project_id = project_members.project_id AND pmg.user_id = OLD.user_id)
+                    )
+                ),
+                granted_by_org_role = CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM project_member_grants
+                        WHERE project_id = project_members.project_id AND user_id = OLD.user_id AND grant_key = 'direct'
+                    ) THEN 0
+                    ELSE 1
+                END
+            WHERE user_id = OLD.user_id;
+
+            UPDATE project_members
+            SET role = CASE
+                WHEN permissions_mask & 32 != 0 THEN 'admin'
+                WHEN permissions_mask & 4 != 0 THEN 'member'
+                ELSE 'viewer'
+            END
+            WHERE user_id = OLD.user_id;
+        END;
+
+        -- Materialization: Synchronize grants when a user is removed from organization_members
+        DROP TRIGGER IF EXISTS sync_grants_after_om_delete;
+        CREATE TRIGGER sync_grants_after_om_delete
+        AFTER DELETE ON organization_members
+        FOR EACH ROW
+        BEGIN
+            DELETE FROM organization_member_roles
+            WHERE organization_id = OLD.organization_id AND user_id = OLD.user_id;
+
+            DELETE FROM project_member_grants
+            WHERE source_org_id = OLD.organization_id AND user_id = OLD.user_id;
+
+            DELETE FROM project_members
+            WHERE user_id = OLD.user_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM project_member_grants
+                  WHERE project_id = project_members.project_id AND user_id = OLD.user_id
+              );
         END;
 
         -- Materialization: Sync project_members when a grant is inserted
@@ -722,12 +887,48 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         END;
 
         -- Direct Member Sync: When deleted from project_members, remove all grants for that user on that project
-        CREATE TRIGGER IF NOT EXISTS sync_grants_on_pm_delete
+        -- and clean up active assignments on this project's tasks
+        DROP TRIGGER IF EXISTS sync_grants_on_pm_delete;
+        CREATE TRIGGER sync_grants_on_pm_delete
         AFTER DELETE ON project_members
         FOR EACH ROW
         BEGIN
             DELETE FROM project_member_grants
             WHERE project_id = OLD.project_id AND user_id = OLD.user_id;
+
+            -- Revert any in_progress task to accepted if this user is the only assignee
+            UPDATE task
+            SET status = 'accepted'
+            WHERE project_id = OLD.project_id
+              AND status = 'in_progress'
+              AND (SELECT COUNT(*) FROM assignments WHERE task_id = task.id) <= 1
+              AND EXISTS (SELECT 1 FROM assignments WHERE task_id = task.id AND assigned_to = OLD.user_id);
+
+            -- Remove user assignments on this project's tasks
+            DELETE FROM assignments
+            WHERE assigned_to = OLD.user_id
+              AND task_id IN (SELECT id FROM task WHERE project_id = OLD.project_id);
+        END;
+
+        -- Assignment Cleanup on Permission Demotion: When member loses PERM_BE_ASSIGNED (4), purge assignments
+        DROP TRIGGER IF EXISTS cleanup_assignments_on_pm_demote;
+        CREATE TRIGGER cleanup_assignments_on_pm_demote
+        AFTER UPDATE OF permissions_mask ON project_members
+        FOR EACH ROW
+        WHEN (NEW.permissions_mask & 4) = 0 AND (OLD.permissions_mask & 4) != 0
+        BEGIN
+            -- Revert in_progress task to accepted if demoted user is sole assignee
+            UPDATE task
+            SET status = 'accepted'
+            WHERE project_id = NEW.project_id
+              AND status = 'in_progress'
+              AND (SELECT COUNT(*) FROM assignments WHERE task_id = task.id) <= 1
+              AND EXISTS (SELECT 1 FROM assignments WHERE task_id = task.id AND assigned_to = NEW.user_id);
+
+            -- Remove user assignments on this project's tasks
+            DELETE FROM assignments
+            WHERE assigned_to = NEW.user_id
+              AND task_id IN (SELECT id FROM task WHERE project_id = NEW.project_id);
         END;
 
         -- Task Trigger 1: Cannot assign a task that is in 'suggested' status
@@ -762,7 +963,8 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TRIGGER IF NOT EXISTS check_task_author_permission
         BEFORE INSERT ON task
         FOR EACH ROW
-        WHEN NEW.author IS NOT NULL
+        WHEN NEW.project_id IS NOT NULL
+          AND NEW.author IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM project_members
               WHERE project_id = NEW.project_id
@@ -777,7 +979,8 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TRIGGER IF NOT EXISTS check_task_message_permission
         BEFORE INSERT ON task_message
         FOR EACH ROW
-        WHEN NEW.author_id IS NOT NULL
+        WHEN (SELECT project_id FROM task WHERE id = NEW.task_id) IS NOT NULL
+          AND NEW.author_id IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM project_members
               WHERE project_id = (SELECT project_id FROM task WHERE id = NEW.task_id)
@@ -792,7 +995,8 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         CREATE TRIGGER IF NOT EXISTS check_assignment_permission
         BEFORE INSERT ON assignments
         FOR EACH ROW
-        WHEN NOT EXISTS (
+        WHEN (SELECT project_id FROM task WHERE id = NEW.task_id) IS NOT NULL
+          AND NOT EXISTS (
             SELECT 1 FROM project_members
             WHERE project_id = (SELECT project_id FROM task WHERE id = NEW.task_id)
               AND user_id = NEW.assigned_to
@@ -852,13 +1056,16 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
         INSERT OR IGNORE INTO project (id, name, description, owner_org_id, leader_id)
         VALUES (1, 'Acme Engineering', 'Core product development and backend services.', 1, 1);
 
-        -- Project 1 members: Alice (admin), Bob (member)
-        INSERT OR IGNORE INTO project_members (project_id, user_id, role, permissions_mask, granted_by_org_role)
-        VALUES (1, 1, 'admin', 63, 0), (1, 2, 'member', 15, 0);
+        -- Organization role mappings for Acme Engineering (members and admins have access)
+        INSERT OR IGNORE INTO project_org_role_access (project_id, organization_id, org_role, project_role)
+        VALUES (1, 1, 'admin', 'admin'), (1, 1, 'member', 'member');
 
-        -- Project 1 member grants (direct)
+        -- Project 1 leader: Alice (admin, direct)
+        INSERT OR IGNORE INTO project_members (project_id, user_id, role, permissions_mask, granted_by_org_role)
+        VALUES (1, 1, 'admin', 63, 0);
+
         INSERT OR IGNORE INTO project_member_grants (project_id, user_id, grant_key, project_role)
-        VALUES (1, 1, 'direct', 'admin'), (1, 2, 'direct', 'member');
+        VALUES (1, 1, 'direct', 'admin');
 
         -- Default Project 2: Bob''s Personal Project (Standalone, leader: Bob)
         INSERT OR IGNORE INTO project (id, name, description, owner_org_id, leader_id)

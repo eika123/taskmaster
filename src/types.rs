@@ -196,6 +196,8 @@ pub struct OrgProjectAffiliation {
     pub project_name: String,
     pub relationship_type: String,
     pub max_granted_role: String,
+    pub has_access: bool,
+    pub user_role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

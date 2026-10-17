@@ -8,13 +8,15 @@ use crate::backend::app_endpoints::{
     set_org_role_project_access,
 };
 use super::modals::{
-    AssignMemberRoleModal, ConfirmActiveTasksWarningModal, CreateOrgRoleModal,
+    AssignMemberRoleModal, ConfirmActiveTasksWarningModal, ConfirmRemoveMemberModal,
+    CreateOrgRoleModal,
 };
 
 #[derive(Clone, PartialEq, Eq)]
 enum PendingWarningAction {
     RevokeRole { user_id: i64, role: String },
     RevokeRule { project_id: i64, org_role: String },
+    RevokeMember { user_id: i64 },
 }
 
 #[component]
@@ -103,6 +105,8 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
     // Modals state
     let mut show_create_role = use_signal(|| false);
     let mut active_assign_member = use_signal(|| Option::<OrganizationMember>::None);
+    let mut member_to_remove = use_signal(|| Option::<OrganizationMember>::None);
+    let mut is_removing_member = use_signal(|| false);
 
     // Warning confirmation modal state for active tasks
     let mut pending_warning = use_signal(|| Option::<(String, PendingWarningAction)>::None);
@@ -147,12 +151,31 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
         });
     };
 
-    let handle_remove_member = move |uid: i64| {
-        spawn(async move {
-            if remove_organization_member(organization_id, uid).await.is_ok() {
-                handle_refresh();
-            }
-        });
+    let handle_confirm_remove_member = move || {
+        if let Some(m) = member_to_remove.read().clone() {
+            let uid = m.user_id;
+            is_removing_member.set(true);
+            spawn(async move {
+                match remove_organization_member(organization_id, uid, false).await {
+                    Ok(_) => {
+                        is_removing_member.set(false);
+                        member_to_remove.set(None);
+                        handle_refresh();
+                    }
+                    Err(e) => {
+                        is_removing_member.set(false);
+                        member_to_remove.set(None);
+                        let err_str = e.to_string();
+                        if err_str.contains("Active task impact warning") {
+                            pending_warning.set(Some((
+                                err_str,
+                                PendingWarningAction::RevokeMember { user_id: uid },
+                            )));
+                        }
+                    }
+                }
+            });
+        }
     };
 
     let handle_revoke_rule = move |(pid, o_role): (i64, String)| {
@@ -187,6 +210,9 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
                     PendingWarningAction::RevokeRule { project_id, org_role } => {
                         let _ = revoke_org_role_project_access(project_id, organization_id, org_role, true).await;
                     }
+                    PendingWarningAction::RevokeMember { user_id } => {
+                        let _ = remove_organization_member(organization_id, user_id, true).await;
+                    }
                 }
                 is_warning_loading.set(false);
                 pending_warning.set(None);
@@ -194,6 +220,28 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
             });
         }
     };
+
+    let current_selected_project_ceiling = {
+        let current_pid = *new_rule_project_id.read();
+        affiliated_projects
+            .iter()
+            .find(|p| Some(p.project_id) == current_pid)
+            .map(|p| p.max_granted_role.as_str())
+            .unwrap_or("member")
+    };
+
+    let allowed_project_roles: Vec<&'static str> = match current_selected_project_ceiling {
+        "viewer" => vec!["viewer"],
+        "admin" => vec!["viewer", "member", "admin"],
+        _ => vec!["viewer", "member"],
+    };
+
+    // Auto-adjust new_rule_project_role if it exceeds the project ceiling
+    if !allowed_project_roles.contains(&new_rule_project_role.read().as_str()) {
+        if let Some(first_allowed) = allowed_project_roles.first() {
+            new_rule_project_role.set(first_allowed.to_string());
+        }
+    }
 
     let handle_add_rule = move |_| {
         let pid = match *new_rule_project_id.read() {
@@ -398,12 +446,17 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
                                                                 "+ Assign Role"
                                                             }
                                                             if !is_gov {
-                                                                button {
-                                                                    r#type: "button",
-                                                                    class: "btn-action-sm",
-                                                                    style: "color: var(--danger); border-color: var(--danger);",
-                                                                    onclick: move |_| handle_remove_member(uid),
-                                                                    "Remove"
+                                                                {
+                                                                    let m_for_remove = m.clone();
+                                                                    rsx! {
+                                                                        button {
+                                                                            r#type: "button",
+                                                                            class: "btn-action-sm",
+                                                                            style: "color: var(--danger); border-color: var(--danger);",
+                                                                            onclick: move |_| member_to_remove.set(Some(m_for_remove.clone())),
+                                                                            "Remove"
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -550,9 +603,15 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
                                         class: "task-status-select",
                                         value: "{new_rule_project_role}",
                                         onchange: move |e| new_rule_project_role.set(e.value()),
-                                        option { value: "viewer", "Viewer (Read Only)" }
-                                        option { value: "member", "Member (Create & Edit Tasks)" }
-                                        option { value: "admin", "Admin (Manage Settings & Delete)" }
+                                        if allowed_project_roles.contains(&"viewer") {
+                                            option { value: "viewer", "Viewer (Read Only)" }
+                                        }
+                                        if allowed_project_roles.contains(&"member") {
+                                            option { value: "member", "Member (Create & Edit Tasks)" }
+                                        }
+                                        if allowed_project_roles.contains(&"admin") {
+                                            option { value: "admin", "Admin (Manage Settings & Delete)" }
+                                        }
                                     }
                                 }
                                 button {
@@ -566,6 +625,15 @@ pub fn OrganizationRolesPage(organization_id: i64) -> Element {
                         }
                     }
                 }
+            }
+        }
+
+        if let Some(m) = member_to_remove.read().clone() {
+            ConfirmRemoveMemberModal {
+                member_name: m.user_name.clone(),
+                on_close: move |_| member_to_remove.set(None),
+                on_confirm: handle_confirm_remove_member,
+                is_loading: *is_removing_member.read(),
             }
         }
 

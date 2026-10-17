@@ -36,12 +36,33 @@ pub async fn suggest_task_for_project(
 ) -> Result<(), ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let can_create: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_create {
+        return Err(ServerFnError::new(
+            "You do not have permission to create or suggest tasks in this project.",
+        ));
+    }
+
     sqlx::query(
         "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(project_id)
-    .bind(task_title)
-    .bind(description)
+    .bind(task_title.trim())
+    .bind(description.trim())
     .bind(user.id)
     .bind(TaskStatus::Suggested)
     .execute(pool)
@@ -53,7 +74,58 @@ pub async fn suggest_task_for_project(
 
 #[server]
 pub async fn assign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let project_id: Option<i64> = sqlx::query_scalar("SELECT project_id FROM task WHERE id = $1")
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Task not found: {e}")))?
+        .flatten();
+
+    if let Some(pid) = project_id {
+        let can_edit: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_edit {
+            return Err(ServerFnError::new(
+                "You do not have permission to manage assignments in this project.",
+            ));
+        }
+
+        let assignee_valid: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user_id)
+        .bind(pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !assignee_valid {
+            return Err(ServerFnError::new(
+                "Cannot assign task to a user who lacks task execution permissions in this project.",
+            ));
+        }
+    }
+
     sqlx::query("INSERT OR IGNORE INTO assignments (task_id, assigned_to) VALUES ($1, $2)")
         .bind(task_id)
         .bind(user_id)
@@ -66,7 +138,38 @@ pub async fn assign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError
 
 #[server]
 pub async fn unassign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let project_id: Option<i64> = sqlx::query_scalar("SELECT project_id FROM task WHERE id = $1")
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Task not found: {e}")))?
+        .flatten();
+
+    if let Some(pid) = project_id {
+        let can_edit: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_edit {
+            return Err(ServerFnError::new(
+                "You do not have permission to manage assignments in this project.",
+            ));
+        }
+    }
+
     sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
         .bind(task_id)
         .bind(user_id)
@@ -96,6 +199,17 @@ pub async fn get_my_tasks(
          LEFT JOIN user u_author ON task.author = u_author.id 
          LEFT JOIN assignments ON task.id = assignments.task_id
          WHERE (assignments.assigned_to = $1 OR task.author = $1)
+           AND (
+               task.project_id IS NULL
+               OR task.project_id = 0
+               OR project.leader_id = $1
+               OR EXISTS (
+                   SELECT 1 FROM project_members pm
+                   WHERE pm.project_id = task.project_id
+                     AND pm.user_id = $1
+                     AND (pm.permissions_mask & 1) != 0
+               )
+           )
            AND task.id > $2 
          ORDER BY task.id ASC 
          LIMIT $3",
@@ -179,8 +293,29 @@ pub async fn get_project_tasks(
     after_id: Option<i64>,
     amount: u64,
 ) -> Result<Vec<Task>, ServerFnError> {
+    let user = get_auth_user().await?;
     let last_id = after_id.unwrap_or(0);
     let pool = get_db().await;
+
+    let can_read: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_read {
+        return Err(ServerFnError::new(
+            "You do not have permission to view this project's tasks.",
+        ));
+    }
 
     let raw_tasks = sqlx::query_as::<_, RawTask>(
         "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
@@ -261,6 +396,7 @@ pub async fn get_project_tasks(
 
 #[server]
 pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
 
     let raw = sqlx::query_as::<_, RawTask>(
@@ -277,6 +413,28 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
     .fetch_one(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch task: {e}")))?;
+
+    if raw.project_id != 0 {
+        let can_read: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(raw.project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_read {
+            return Err(ServerFnError::new(
+                "You do not have permission to view this task.",
+            ));
+        }
+    }
 
     let assignees = sqlx::query_as::<_, User>(
         "SELECT user.id, user.name, user.email 
@@ -311,11 +469,86 @@ pub async fn update_task(
     status: TaskStatus,
     assignee_ids: Vec<i64>,
 ) -> Result<Task, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
+
+    let task_meta: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT project_id, author FROM task WHERE id = $1",
+    )
+    .bind(task_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    let (project_id, author) = match task_meta {
+        Some(m) => m,
+        None => return Err(ServerFnError::new("Task not found.")),
+    };
+
+    if project_id != 0 {
+        let can_edit: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_edit {
+            return Err(ServerFnError::new(
+                "You do not have permission to edit tasks in this project.",
+            ));
+        }
+
+        for uid in &assignee_ids {
+            let assignee_valid: bool = sqlx::query_scalar(
+                "SELECT (p.leader_id = $1 OR EXISTS (
+                    SELECT 1 FROM project_members pm
+                    WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                 ))
+                 FROM project p WHERE p.id = $2",
+            )
+            .bind(*uid)
+            .bind(project_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+            .unwrap_or(false);
+
+            if !assignee_valid {
+                return Err(ServerFnError::new(
+                    "Cannot assign task to a user who lacks task execution permissions in this project.",
+                ));
+            }
+        }
+    } else {
+        if author != Some(user.id) {
+            let is_assigned: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM assignments WHERE task_id = $1 AND assigned_to = $2",
+            )
+            .bind(task_id)
+            .bind(user.id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap_or(false);
+
+            if !is_assigned {
+                return Err(ServerFnError::new(
+                    "You do not have permission to edit this standalone task.",
+                ));
+            }
+        }
+    }
 
     if status == TaskStatus::Suggested && !assignee_ids.is_empty() {
         return Err(ServerFnError::new(
@@ -398,7 +631,50 @@ pub async fn update_task(
 
 #[server]
 pub async fn delete_task(task_id: i64) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let task_meta: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT project_id, author FROM task WHERE id = $1",
+    )
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    let (project_id, author) = match task_meta {
+        Some(m) => m,
+        None => return Err(ServerFnError::new("Task not found.")),
+    };
+
+    if project_id != 0 {
+        let can_delete: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 32) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_delete && author != Some(user.id) {
+            return Err(ServerFnError::new(
+                "You do not have permission to delete this task.",
+            ));
+        }
+    } else {
+        if author != Some(user.id) {
+            return Err(ServerFnError::new(
+                "You do not have permission to delete this task.",
+            ));
+        }
+    }
+
     sqlx::query("DELETE FROM task WHERE id = $1")
         .bind(task_id)
         .execute(pool)
@@ -410,7 +686,61 @@ pub async fn delete_task(task_id: i64) -> Result<(), ServerFnError> {
 
 #[server]
 pub async fn set_task_status(task_id: u64, status: TaskStatus) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let task_meta: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT project_id, author FROM task WHERE id = $1",
+    )
+    .bind(task_id as i64)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    let (project_id, author) = match task_meta {
+        Some(m) => m,
+        None => return Err(ServerFnError::new("Task not found.")),
+    };
+
+    if project_id != 0 {
+        let can_mutate: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_mutate {
+            return Err(ServerFnError::new(
+                "You do not have permission to update task status in this project.",
+            ));
+        }
+    } else {
+        if author != Some(user.id) {
+            let is_assigned: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM assignments WHERE task_id = $1 AND assigned_to = $2",
+            )
+            .bind(task_id as i64)
+            .bind(user.id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+
+            if !is_assigned {
+                return Err(ServerFnError::new(
+                    "You do not have permission to update this standalone task status.",
+                ));
+            }
+        }
+    }
+
     sqlx::query("UPDATE task SET status = $1 WHERE id = $2")
         .bind(status)
         .bind(task_id as i64)
@@ -423,7 +753,39 @@ pub async fn set_task_status(task_id: u64, status: TaskStatus) -> Result<(), Ser
 
 #[server]
 pub async fn get_task_messages(task_id: i64) -> Result<Vec<TaskMessage>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let project_id: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT project_id FROM task WHERE id = $1",
+    )
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    if let Some(Some(pid)) = project_id {
+        let can_read: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_read {
+            return Err(ServerFnError::new(
+                "You do not have permission to view this task's messages.",
+            ));
+        }
+    }
+
     let messages = sqlx::query_as::<_, TaskMessage>(
         "SELECT tm.task_id, tm.msg_id, tm.author_id,
                 COALESCE(u.name, 'Deleted User') AS author_name,

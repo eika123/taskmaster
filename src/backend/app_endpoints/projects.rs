@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::types::{Organization, Project, ProjectMember, ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule};
+use crate::types::{Organization, Project, ProjectMember, ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule, User};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -18,7 +18,10 @@ pub async fn get_user_projects() -> Result<Vec<Project>, ServerFnError> {
          LEFT JOIN organization org ON p.owner_org_id = org.id
          INNER JOIN user u ON p.leader_id = u.id
          WHERE p.leader_id = $1
-            OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $1)
+            OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+            )
          ORDER BY p.id ASC",
     )
     .bind(user.id)
@@ -31,6 +34,7 @@ pub async fn get_user_projects() -> Result<Vec<Project>, ServerFnError> {
 
 #[server]
 pub async fn get_project(project_id: i64) -> Result<Project, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
     let proj = sqlx::query_as::<_, Project>(
         "SELECT p.id, p.name, p.description, p.owner_org_id, org.name AS owner_org_name,
@@ -44,6 +48,37 @@ pub async fn get_project(project_id: i64) -> Result<Project, ServerFnError> {
     .fetch_one(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
+
+    let can_view: bool = sqlx::query_scalar(
+        "SELECT (
+            p.leader_id = $1
+            OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+            )
+            OR (p.owner_org_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM organization o
+                WHERE o.id = p.owner_org_id AND (
+                    o.governing_user_id = $1
+                    OR EXISTS (
+                        SELECT 1 FROM organization_member_roles omr
+                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+                    )
+                )
+            ))
+         )
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_view {
+        return Err(ServerFnError::new("You do not have permission to view this project."));
+    }
 
     Ok(proj)
 }
@@ -167,7 +202,40 @@ pub async fn remove_project_member(
 
 #[server]
 pub async fn get_project_members(project_id: i64) -> Result<Vec<ProjectMember>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let can_view: bool = sqlx::query_scalar(
+        "SELECT (
+            p.leader_id = $1
+            OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+            )
+            OR (p.owner_org_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM organization o
+                WHERE o.id = p.owner_org_id AND (
+                    o.governing_user_id = $1
+                    OR EXISTS (
+                        SELECT 1 FROM organization_member_roles omr
+                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+                    )
+                )
+            ))
+         )
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_view {
+        return Err(ServerFnError::new("You do not have permission to view members of this project."));
+    }
+
     let members = sqlx::query_as::<_, ProjectMember>(
         "SELECT pm.project_id, pm.user_id, u.name AS user_name, u.email AS user_email,
                 pm.role, (pm.granted_by_org_role != 0) AS granted_by_org_role,
@@ -183,6 +251,80 @@ pub async fn get_project_members(project_id: i64) -> Result<Vec<ProjectMember>, 
     .map_err(|e| ServerFnError::new(format!("Failed to fetch project members: {e}")))?;
 
     Ok(members)
+}
+
+#[server]
+pub async fn get_my_project_member(
+    project_id: i64,
+) -> Result<Option<ProjectMember>, ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let member = sqlx::query_as::<_, ProjectMember>(
+        "SELECT pm.project_id, pm.user_id, u.name AS user_name, u.email AS user_email,
+                pm.role, (pm.granted_by_org_role != 0) AS granted_by_org_role,
+                pm.permissions_mask, pm.active_grant_key, pm.joined_at
+         FROM project_members pm
+         INNER JOIN user u ON pm.user_id = u.id
+         WHERE pm.project_id = $1 AND pm.user_id = $2",
+    )
+    .bind(project_id)
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch my project membership: {e}")))?;
+
+    Ok(member)
+}
+
+#[server]
+pub async fn get_project_assignable_users(
+    project_id: Option<i64>,
+) -> Result<Vec<User>, ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+    if let Some(pid) = project_id {
+        let can_view: bool = sqlx::query_scalar(
+            "SELECT (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+             ))
+             FROM project p WHERE p.id = $2",
+        )
+        .bind(user.id)
+        .bind(pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+        .unwrap_or(false);
+
+        if !can_view {
+            return Err(ServerFnError::new("You do not have permission to view assignable users for this project."));
+        }
+
+        let users = sqlx::query_as::<_, User>(
+            "SELECT u.id, u.name, u.email
+             FROM project_members pm
+             JOIN user u ON pm.user_id = u.id
+             WHERE pm.project_id = $1 AND (pm.permissions_mask & 4) != 0
+             ORDER BY u.name ASC",
+        )
+        .bind(pid)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to fetch assignable project users: {e}")))?;
+
+        Ok(users)
+    } else {
+        let users = sqlx::query_as::<_, User>(
+            "SELECT id, name, email FROM user ORDER BY name ASC",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to fetch users: {e}")))?;
+
+        Ok(users)
+    }
 }
 
 #[server]
@@ -512,7 +654,40 @@ pub async fn remove_organization_from_project(
 pub async fn get_project_organizations(
     project_id: i64,
 ) -> Result<Vec<ProjectOrganization>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let can_view: bool = sqlx::query_scalar(
+        "SELECT (
+            p.leader_id = $1
+            OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+            )
+            OR (p.owner_org_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM organization o
+                WHERE o.id = p.owner_org_id AND (
+                    o.governing_user_id = $1
+                    OR EXISTS (
+                        SELECT 1 FROM organization_member_roles omr
+                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+                    )
+                )
+            ))
+         )
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_view {
+        return Err(ServerFnError::new("You do not have permission to view this project."));
+    }
+
     let orgs = sqlx::query_as::<_, ProjectOrganization>(
         "SELECT po.project_id, po.organization_id, o.name AS organization_name,
                 po.relationship_type, po.max_granted_role, po.joined_at
@@ -614,11 +789,12 @@ pub async fn revoke_org_role_project_access(
         task_id: i64,
         task_title: String,
         status: String,
+        user_id: i64,
         user_name: String,
     }
 
     let impacts: Vec<ImpactRow> = sqlx::query_as(
-        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, u.name AS user_name
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, u.id AS user_id, u.name AS user_name
          FROM project_member_grants pmg
          JOIN user u ON pmg.user_id = u.id
          JOIN assignments a ON a.assigned_to = u.id
@@ -660,23 +836,56 @@ pub async fn revoke_org_role_project_access(
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
     for imp in &impacts {
-        if imp.status != "in_progress" {
-            sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = (SELECT id FROM user WHERE name = $2)")
+        if imp.status == "in_progress" {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
                 .bind(imp.task_id)
-                .bind(&imp.user_name)
-                .execute(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await
-                .map_err(|e| ServerFnError::new(format!("Failed to unassign task: {e}")))?;
+                .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
+            if count <= 1 {
+                sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
+                    .bind(imp.task_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+            }
         }
+        sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
+            .bind(imp.task_id)
+            .bind(imp.user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to unassign task: {e}")))?;
     }
+
+    sqlx::query("DELETE FROM project_member_grants WHERE project_id = $1 AND source_org_id = $2 AND source_org_role = $3")
+        .bind(project_id)
+        .bind(organization_id)
+        .bind(&org_role)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to delete grants: {e}")))?;
 
     sqlx::query("DELETE FROM project_org_role_access WHERE project_id = $1 AND organization_id = $2 AND org_role = $3")
         .bind(project_id)
         .bind(organization_id)
-        .bind(org_role)
+        .bind(&org_role)
         .execute(&mut *tx)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to revoke role rule: {e}")))?;
+
+    sqlx::query(
+        "DELETE FROM project_members
+         WHERE project_id = $1
+           AND NOT EXISTS (
+               SELECT 1 FROM project_member_grants
+               WHERE project_id = $1 AND user_id = project_members.user_id
+           )"
+    )
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to sync project members: {e}")))?;
 
     tx.commit()
         .await
@@ -689,7 +898,40 @@ pub async fn revoke_org_role_project_access(
 pub async fn get_project_org_role_access(
     project_id: i64,
 ) -> Result<Vec<ProjectOrgRoleRule>, ServerFnError> {
+    let user = get_auth_user().await?;
     let pool = get_db().await;
+
+    let can_view: bool = sqlx::query_scalar(
+        "SELECT (
+            p.leader_id = $1
+            OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+            )
+            OR (p.owner_org_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM organization o
+                WHERE o.id = p.owner_org_id AND (
+                    o.governing_user_id = $1
+                    OR EXISTS (
+                        SELECT 1 FROM organization_member_roles omr
+                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+                    )
+                )
+            ))
+         )
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_view {
+        return Err(ServerFnError::new("You do not have permission to view this project."));
+    }
+
     let rules = sqlx::query_as::<_, ProjectOrgRoleRule>(
         "SELECT project_id, organization_id, org_role, project_role
          FROM project_org_role_access

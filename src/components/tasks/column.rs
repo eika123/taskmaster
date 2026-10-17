@@ -7,10 +7,11 @@ pub fn TaskColumn(
     status: TaskStatus,
     tasks: Vec<Task>,
     all_users: Vec<User>,
-    on_dismiss: Option<EventHandler<i64>>,
-    on_status_change: Option<EventHandler<(u64, TaskStatus)>>,
-    on_assign: Option<EventHandler<(i64, i64)>>,
-    on_unassign: Option<EventHandler<(i64, i64)>>,
+    can_mutate: bool,
+    on_dismiss: EventHandler<i64>,
+    on_status_change: EventHandler<(u64, TaskStatus)>,
+    on_assign: EventHandler<(i64, i64)>,
+    on_unassign: EventHandler<(i64, i64)>,
 ) -> Element {
     let filtered_tasks: Vec<Task> = tasks.into_iter().filter(|t| t.status == status).collect();
     let count = filtered_tasks.len();
@@ -37,26 +38,11 @@ pub fn TaskColumn(
                                 TaskCard {
                                     task: task.clone(),
                                     all_users: all_users.clone(),
-                                    on_dismiss: move |id| {
-                                        if let Some(cb) = on_dismiss {
-                                            cb.call(id);
-                                        }
-                                    },
-                                    on_status_change: move |args| {
-                                        if let Some(cb) = on_status_change {
-                                            cb.call(args);
-                                        }
-                                    },
-                                    on_assign: move |args| {
-                                        if let Some(cb) = on_assign {
-                                            cb.call(args);
-                                        }
-                                    },
-                                    on_unassign: move |args| {
-                                        if let Some(cb) = on_unassign {
-                                            cb.call(args);
-                                        }
-                                    },
+                                    can_mutate,
+                                    on_dismiss: move |id| on_dismiss.call(id),
+                                    on_status_change: move |args| on_status_change.call(args),
+                                    on_assign: move |args| on_assign.call(args),
+                                    on_unassign: move |args| on_unassign.call(args),
                                 }
                             }
                         }

@@ -13,13 +13,49 @@ use crate::backend::middleware::auth::{AppAuthSession, SqlxSqliteSessionPool};
 #[cfg(feature = "server")]
 use crate::backend::middleware::rate_limiter::get_rate_limiter;
 
+#[cfg(test)]
+static TEST_AUTH_USER: std::sync::RwLock<Option<Option<User>>> = std::sync::RwLock::new(None);
+
+#[cfg(test)]
+pub fn set_test_auth_user(user: Option<User>) {
+    let mut lock = TEST_AUTH_USER.write().unwrap();
+    *lock = Some(user);
+}
+
+#[cfg(test)]
+pub fn reset_test_auth_user() {
+    let mut lock = TEST_AUTH_USER.write().unwrap();
+    *lock = None;
+}
+
 #[cfg(feature = "server")]
 pub async fn get_auth_user() -> Result<User, ServerFnError> {
-    let auth = dioxus_fullstack::FullstackContext::extract::<AppAuthSession, _>()
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to extract auth session: {e}")))?;
-    auth.current_user
-        .ok_or_else(|| ServerFnError::new("Unauthorized: Authentication required"))
+    #[cfg(test)]
+    {
+        if let Some(user_opt) = &*TEST_AUTH_USER.read().unwrap() {
+            return user_opt.clone().ok_or_else(|| ServerFnError::new("Unauthorized: Authentication required"));
+        }
+        if let Ok(auth) = dioxus_fullstack::FullstackContext::extract::<AppAuthSession, _>().await {
+            if let Some(user) = auth.current_user {
+                return Ok(user);
+            }
+        }
+        // Default fallback for unit/integration tests: Alice Johnson (id: 1)
+        return Ok(User {
+            id: 1,
+            name: "Alice Johnson".to_string(),
+            email: "alice@example.com".to_string(),
+        });
+    }
+
+    #[cfg(not(test))]
+    {
+        let auth = dioxus_fullstack::FullstackContext::extract::<AppAuthSession, _>()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to extract auth session: {e}")))?;
+        auth.current_user
+            .ok_or_else(|| ServerFnError::new("Unauthorized: Authentication required"))
+    }
 }
 
 #[server]

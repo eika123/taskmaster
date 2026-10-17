@@ -24,7 +24,7 @@ pub fn OrganizationMemberView(
         leave_error.set(None);
         let nav_clone = nav.clone();
         spawn(async move {
-            match remove_organization_member(org_id, current_user_id).await {
+            match remove_organization_member(org_id, current_user_id, true).await {
                 Ok(_) => {
                     is_leaving.set(false);
                     nav_clone.push(Route::DashboardPage {});
@@ -123,31 +123,37 @@ pub fn OrganizationMemberView(
                 }
             }
 
-            // Affiliated Projects
+            // Accessible Organization Projects
             div { class: "dashboard-panel",
-                h2 { class: "dashboard-panel-title", "Affiliated Projects ({affiliated_projects.len()})" }
-                if affiliated_projects.is_empty() {
-                    p { class: "empty-description", "No projects are currently affiliated with this organization." }
-                } else {
-                    div { class: "project-card-list",
-                        for p in &affiliated_projects {
-                            div { key: "{p.project_id}", class: "project-card",
-                                div { style: "display: flex; justify-content: space-between; align-items: flex-start;",
-                                    Link {
-                                        to: Route::ProjectTasksPage { project_id: p.project_id },
-                                        class: "project-card-title",
-                                        "{p.project_name}"
-                                    }
-                                    span { class: "task-detail-status status-accepted badge-sm",
-                                        "Rel: {p.relationship_type}"
-                                    }
-                                }
-                                div { class: "project-card-meta",
-                                    span { "Max Role: {p.max_granted_role}" }
-                                    Link {
-                                        to: Route::ProjectTasksPage { project_id: p.project_id },
-                                        style: "color: var(--primary); text-decoration: none; font-weight: var(--font-weight-bold);",
-                                        "Open Board →"
+                {
+                    let accessible_projects: Vec<_> = affiliated_projects.into_iter().filter(|p| p.has_access).collect();
+                    let count = accessible_projects.len();
+                    rsx! {
+                        h2 { class: "dashboard-panel-title", "Accessible Projects ({count})" }
+                        if count == 0 {
+                            p { class: "empty-description", "No accessible projects found for your assigned roles in this organization." }
+                        } else {
+                            div { class: "project-card-list",
+                                for p in accessible_projects {
+                                    div { key: "{p.project_id}", class: "project-card",
+                                        div { style: "display: flex; justify-content: space-between; align-items: flex-start;",
+                                            Link {
+                                                to: Route::ProjectTasksPage { project_id: p.project_id },
+                                                class: "project-card-title",
+                                                "{p.project_name}"
+                                            }
+                                            span { class: "task-detail-status status-accepted badge-sm",
+                                                "Role: {p.user_role.as_deref().unwrap_or(\"Member\")}"
+                                            }
+                                        }
+                                        div { class: "project-card-meta",
+                                            span { "Max Role: {p.max_granted_role}" }
+                                            Link {
+                                                to: Route::ProjectTasksPage { project_id: p.project_id },
+                                                style: "color: var(--primary); text-decoration: none; font-weight: var(--font-weight-bold);",
+                                                "Open Board →"
+                                            }
+                                        }
                                     }
                                 }
                             }
