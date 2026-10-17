@@ -21,7 +21,7 @@ pub fn DashboardOrganizations(
                                 span { class: "inbox-item-title", "{org.name}" }
                                 span { class: "inbox-item-meta", "@{org.slug}" }
                             }
-                            div { style: "font-size: 0.85rem; color: var(--text-secondary);",
+                            div { class: "inbox-item-msg",
                                 "Governed by: "
                                 strong { "{org.governing_user_name}" }
                             }

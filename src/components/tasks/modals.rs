@@ -141,7 +141,7 @@ pub fn InlineInviteModal(
             }
             div { style: "display: flex; flex-direction: column; gap: 12px;",
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Select User" }
+                    label { class: "form-label", "Select User" }
                     select {
                         class: "task-status-select",
                         onchange: move |e| {
@@ -159,7 +159,7 @@ pub fn InlineInviteModal(
                     }
                 }
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Role" }
+                    label { class: "form-label", "Role" }
                     select {
                         class: "task-status-select",
                         value: "{invite_role}",
@@ -169,7 +169,7 @@ pub fn InlineInviteModal(
                     }
                 }
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Personal Message (Optional)" }
+                    label { class: "form-label", "Personal Message (Optional)" }
                     textarea {
                         class: "task-message-input",
                         placeholder: "e.g. Hey, join our project to collaborate on these tasks!",

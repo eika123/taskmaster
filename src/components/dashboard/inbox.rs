@@ -20,7 +20,7 @@ pub fn DashboardInbox(
             h2 { class: "dashboard-panel-title",
                 span { "Message Box (Inbox)" }
                 if total_invites > 0 {
-                    span { class: "task-detail-status status-in_progress", style: "font-size: 0.75rem;",
+                    span { class: "task-detail-status status-in_progress badge-sm",
                         "{total_invites} Pending"
                     }
                 }

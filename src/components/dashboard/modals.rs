@@ -52,7 +52,7 @@ pub fn CreateProjectModal(
             }
             div { style: "display: flex; flex-direction: column; gap: 12px;",
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Project Name" }
+                    label { class: "form-label", "Project Name" }
                     input {
                         class: "task-edit-title-input",
                         placeholder: "e.g. Core Engine",
@@ -61,7 +61,7 @@ pub fn CreateProjectModal(
                     }
                 }
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Description" }
+                    label { class: "form-label", "Description" }
                     textarea {
                         class: "task-edit-description-textarea",
                         placeholder: "What will this project accomplish?",
@@ -71,7 +71,7 @@ pub fn CreateProjectModal(
                 }
                 if !organizations.is_empty() {
                     div {
-                        label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Owning Organization (Optional)" }
+                        label { class: "form-label", "Owning Organization (Optional)" }
                         select {
                             class: "task-status-select",
                             onchange: move |e| {
@@ -155,7 +155,7 @@ pub fn CreateOrgModal(
             }
             div { style: "display: flex; flex-direction: column; gap: 12px;",
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Organization Name" }
+                    label { class: "form-label", "Organization Name" }
                     input {
                         class: "task-edit-title-input",
                         placeholder: "e.g. Acme Corporation",
@@ -164,7 +164,7 @@ pub fn CreateOrgModal(
                     }
                 }
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Unique Slug" }
+                    label { class: "form-label", "Unique Slug" }
                     input {
                         class: "task-edit-title-input",
                         placeholder: "e.g. acme-corp",
@@ -254,7 +254,7 @@ pub fn InviteMemberModal(
             }
             div { style: "display: flex; flex-direction: column; gap: 12px;",
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Select User" }
+                    label { class: "form-label", "Select User" }
                     select {
                         class: "task-status-select",
                         onchange: move |e| {
@@ -272,7 +272,7 @@ pub fn InviteMemberModal(
                     }
                 }
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Role" }
+                    label { class: "form-label", "Role" }
                     select {
                         class: "task-status-select",
                         value: "{invite_role}",
@@ -282,7 +282,7 @@ pub fn InviteMemberModal(
                     }
                 }
                 div {
-                    label { style: "font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;", "Personal Message (Optional)" }
+                    label { class: "form-label", "Personal Message (Optional)" }
                     textarea {
                         class: "task-message-input",
                         placeholder: "e.g. Join this project to collaborate on these tasks!",

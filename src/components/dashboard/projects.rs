@@ -31,11 +31,11 @@ pub fn DashboardProjects(
                                             "{pname}"
                                         }
                                         if let Some(org_name) = &proj.owner_org_name {
-                                            span { class: "task-detail-status status-accepted", style: "font-size: 0.72rem; padding: 2px 8px;",
+                                            span { class: "task-detail-status status-accepted badge-sm",
                                                 "{org_name}"
                                             }
                                         } else {
-                                            span { class: "task-detail-status status-suggested", style: "font-size: 0.72rem; padding: 2px 8px;",
+                                            span { class: "task-detail-status status-suggested badge-sm",
                                                 "Standalone"
                                             }
                                         }
@@ -48,7 +48,7 @@ pub fn DashboardProjects(
                                         div { style: "display: flex; gap: 8px;",
                                             button {
                                                 r#type: "button",
-                                                style: "background: transparent; border: 1px solid var(--border-default); color: var(--text-secondary); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 0.75rem; cursor: pointer;",
+                                                class: "btn-action-sm",
                                                 onclick: move |_| {
                                                     on_invite.call((pid, pname_invite.clone()));
                                                 },
@@ -56,7 +56,7 @@ pub fn DashboardProjects(
                                             }
                                             Link {
                                                 to: Route::ProjectTasksPage { project_id: pid },
-                                                style: "color: var(--primary); text-decoration: none; font-weight: 600;",
+                                                style: "color: var(--primary); text-decoration: none; font-weight: var(--font-weight-bold);",
                                                 "View Board →"
                                             }
                                         }

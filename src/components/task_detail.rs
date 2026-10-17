@@ -122,7 +122,7 @@ pub fn TaskPage(id: i64) -> Element {
                     div { class: "task-detail-header",
                         if *is_editing.read() {
                             div { class: "task-detail-title-group", style: "width: 100%;",
-                                label { style: "font-size: 0.85rem; color: var(--text-muted);", "Title" }
+                                label { class: "form-label", "Title" }
                                 input {
                                     class: "task-edit-title-input",
                                     value: "{edit_title}",

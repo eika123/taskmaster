@@ -122,23 +122,23 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                     if let Some(proj) = &project_info {
                         h1 { class: "task-view-title", "{proj.name}" }
                         div { style: "display: flex; gap: 8px; align-items: center; margin-top: 4px;",
-                            span { style: "font-size: 0.82rem; color: var(--text-muted);",
+                            span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
                                 "Led by "
                                 strong { "{proj.leader_name}" }
                             }
                             if let Some(org_name) = &proj.owner_org_name {
-                                span { class: "task-detail-status status-accepted", style: "font-size: 0.72rem; padding: 2px 8px;",
+                                span { class: "task-detail-status status-accepted badge-sm",
                                     "{org_name}"
                                 }
                             } else {
-                                span { class: "task-detail-status status-suggested", style: "font-size: 0.72rem; padding: 2px 8px;",
+                                span { class: "task-detail-status status-suggested badge-sm",
                                     "Standalone"
                                 }
                             }
                         }
                     } else {
                         h1 { class: "task-view-title", "My Tasks" }
-                        p { style: "margin: 4px 0 0; font-size: 0.85rem; color: var(--text-muted);",
+                        p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
                             "Tasks assigned to or created by you across all projects"
                         }
                     }
