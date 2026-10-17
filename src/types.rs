@@ -110,6 +110,18 @@ pub struct OrganizationMember {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct OrganizationPendingInvite {
+    pub organization_id: i64,
+    pub invited_user_id: i64,
+    pub invited_user_name: String,
+    pub invited_user_email: String,
+    pub role: String,
+    pub message: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct Project {
     pub id: i64,
     pub name: String,

@@ -1,16 +1,5 @@
-- Implemented dual-view Organization Dashboard (`/organizations/:organization_id`):
-  * Governor View: member management, multi-role assignment/revocation, custom role creation, role-to-project access rules, affiliated projects, governance handover, and deletion danger zone.
-  * Member View: assigned roles display, read-only member directory, affiliated projects, and leave organization action.
-- Implemented Project Leader Organization Management Modal:
-  * Project leaders can affiliate organizations, set relationship types (`owner`, `partner`, `contractor`, `auditor`), and configure max privilege ceilings (`viewer`, `member`, `admin`).
-
-
-  -- Organization governor who sendt invite should havea a view of outgoing pending invites
-  -- Organization dashboard view should enable creating projects for that organization directly
-  -- There is a role-to-project card in the organization admin board. This shoud allow the admin to open a projects management view, that is different from its task view.
-
-  -- Project management views should allow defining what organizations have what kind of maximum privilege etc, and also revoke organization access.
-
-  Separating these two concerns should help keep the organization dashboard clean
-
-
+-- We need a warning dialog when organization admins remove members.
+-- Users see components they are not allowed to use: for example "viewers" without
+   capability of adding tasks, see the "add task" button
+-- Admins of a guest organizations see project roles in the drop down menu they are not allowed to assign their organization members.
+-- We need logic for what roles in a project can be assigned tasks! Should probably be standalone

@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use crate::Route;
 use crate::components::column_selector::ColumnSelector;
 use crate::backend::app_endpoints::{
     assign_task, delete_task, get_my_tasks, get_project, get_project_tasks,
@@ -166,6 +167,12 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                         }
                     }
                     if pid.is_some() && project_info.as_ref().map(|p| p.leader_id) == current_user_id {
+                        Link {
+                            to: Route::ProjectManagePage { project_id: pid.unwrap() },
+                            class: "btn-task-cancel",
+                            style: "text-decoration: none;",
+                            "⚙ Manage Project"
+                        }
                         button {
                             r#type: "button",
                             class: "btn-task-cancel",

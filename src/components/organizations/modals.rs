@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use crate::types::{OrganizationMember, User};
 use crate::backend::app_endpoints::{
-    assign_organization_member_role, create_organization_role,
+    assign_organization_member_role, create_organization_role, create_project,
     invite_user_to_organization, request_organization_governance_transfer,
 };
 
@@ -486,3 +486,104 @@ pub fn ConfirmActiveTasksWarningModal(
         }
     }
 }
+
+#[component]
+pub fn CreateOrgProjectModal(
+    organization_id: i64,
+    organization_name: String,
+    on_close: EventHandler<()>,
+    on_created: EventHandler<()>,
+) -> Element {
+    let mut proj_name = use_signal(String::new);
+    let mut proj_desc = use_signal(String::new);
+    let mut error_msg = use_signal(|| Option::<String>::None);
+    let mut is_submitting = use_signal(|| false);
+
+    let handle_create = move |_| {
+        let name_val = proj_name.read().trim().to_string();
+        let desc_val = proj_desc.read().trim().to_string();
+
+        if name_val.is_empty() {
+            error_msg.set(Some("Project name is required.".to_string()));
+            return;
+        }
+
+        is_submitting.set(true);
+        error_msg.set(None);
+
+        spawn(async move {
+            match create_project(name_val, desc_val, Some(organization_id)).await {
+                Ok(_) => {
+                    is_submitting.set(false);
+                    on_created.call(());
+                }
+                Err(e) => {
+                    is_submitting.set(false);
+                    error_msg.set(Some(e.to_string()));
+                }
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "overlay-backdrop",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "overlay-modal",
+                style: "max-width: 520px;",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "overlay-header",
+                    div { class: "overlay-title-group",
+                        h2 { class: "overlay-title", "Create Project for {organization_name}" }
+                        p { class: "overlay-subtitle", "This project will be owned by {organization_name}." }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn-close-overlay",
+                        onclick: move |_| on_close.call(()),
+                        "✕"
+                    }
+                }
+                div { style: "padding: 20px 24px; display: flex; flex-direction: column; gap: 16px;",
+                    if let Some(err) = &*error_msg.read() {
+                        div { class: "task-detail-error", "{err}" }
+                    }
+                    div { class: "form-group",
+                        label { class: "form-label", "Project Name" }
+                        input {
+                            class: "task-edit-title-input",
+                            placeholder: "e.g. Website Redesign, Mobile App",
+                            value: "{proj_name}",
+                            oninput: move |e| proj_name.set(e.value()),
+                        }
+                    }
+                    div { class: "form-group",
+                        label { class: "form-label", "Description" }
+                        textarea {
+                            class: "task-edit-description-textarea",
+                            placeholder: "Goals, objectives, or scope of this project...",
+                            value: "{proj_desc}",
+                            oninput: move |e| proj_desc.set(e.value()),
+                        }
+                    }
+                    div { class: "overlay-footer",
+                        button {
+                            r#type: "button",
+                            class: "btn-task-cancel",
+                            onclick: move |_| on_close.call(()),
+                            "Cancel"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "btn-task-save",
+                            disabled: *is_submitting.read(),
+                            onclick: handle_create,
+                            if *is_submitting.read() { "Creating..." } else { "Create Project" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use crate::Route;
 use crate::backend::app_endpoints::{
     get_organization, get_organization_affiliated_projects, get_organization_members,
-    get_organization_role_rules, get_organization_roles, get_users,
+    get_organization_pending_invitations, get_organization_roles, get_users,
 };
 use super::governor_view::OrganizationGovernorView;
 use super::member_view::OrganizationMemberView;
@@ -25,8 +25,8 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
         get_organization_affiliated_projects(organization_id).await
     })?;
 
-    let mut rules_resource = use_server_future(move || async move {
-        get_organization_role_rules(organization_id).await
+    let mut invites_resource = use_server_future(move || async move {
+        get_organization_pending_invitations(organization_id).await
     })?;
 
     let users_resource = use_server_future(|| async move {
@@ -72,8 +72,8 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
         _ => Vec::new(),
     };
 
-    let role_rules = match &*rules_resource.read() {
-        Some(Ok(r)) => r.clone(),
+    let pending_invitations = match &*invites_resource.read() {
+        Some(Ok(inv)) => inv.clone(),
         _ => Vec::new(),
     };
 
@@ -89,7 +89,7 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
         members_resource.restart();
         roles_resource.restart();
         projects_resource.restart();
-        rules_resource.restart();
+        invites_resource.restart();
     };
 
     rsx! {
@@ -111,7 +111,7 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
                     members,
                     roles,
                     affiliated_projects,
-                    role_rules,
+                    pending_invitations,
                     all_users,
                     on_refresh: handle_refresh,
                 }

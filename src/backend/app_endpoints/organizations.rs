@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::types::{Organization, OrganizationMember, OrgProjectAffiliation, OrgRoleRuleItem};
+use crate::types::{Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation, OrgRoleRuleItem};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -674,6 +674,63 @@ pub async fn get_organization_role_rules(
     .map_err(|e| ServerFnError::new(format!("Failed to fetch role rules: {e}")))?;
 
     Ok(rules)
+}
+
+#[server]
+pub async fn get_organization_pending_invitations(
+    organization_id: i64,
+) -> Result<Vec<OrganizationPendingInvite>, ServerFnError> {
+    let pool = get_db().await;
+    let invites = sqlx::query_as::<_, OrganizationPendingInvite>(
+        "SELECT oi.organization_id, oi.invited_user_id, u.name AS invited_user_name,
+                u.email AS invited_user_email, oi.role, oi.message, oi.created_at
+         FROM organization_invitation oi
+         INNER JOIN user u ON oi.invited_user_id = u.id
+         WHERE oi.organization_id = $1
+         ORDER BY oi.created_at DESC",
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch pending invitations: {e}")))?;
+
+    Ok(invites)
+}
+
+#[server]
+pub async fn cancel_organization_invitation(
+    organization_id: i64,
+    invited_user_id: i64,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let is_admin: bool = sqlx::query_scalar(
+        "SELECT (o.governing_user_id = $1 OR EXISTS (
+            SELECT 1 FROM organization_member_roles omr
+            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+         ))
+         FROM organization o WHERE o.id = $2",
+    )
+    .bind(user.id)
+    .bind(organization_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !is_admin {
+        return Err(ServerFnError::new("Only organization admins can cancel invitations."));
+    }
+
+    sqlx::query("DELETE FROM organization_invitation WHERE organization_id = $1 AND invited_user_id = $2")
+        .bind(organization_id)
+        .bind(invited_user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to cancel invitation: {e}")))?;
+
+    Ok(())
 }
 
 

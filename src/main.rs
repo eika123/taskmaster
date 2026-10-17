@@ -27,10 +27,14 @@ pub enum Route {
             DashboardPage {},
             #[route("/organizations/:organization_id")]
             OrganizationDashboardPage { organization_id: i64 },
+            #[route("/organizations/:organization_id/roles")]
+            OrganizationRolesPage { organization_id: i64 },
             #[route("/tasks")]
             TasksDashboardPage {},
             #[route("/projects/tasks/:project_id")]
             ProjectTasksPage { project_id: i64 },
+            #[route("/projects/:project_id/manage")]
+            ProjectManagePage { project_id: i64 },
             #[route("/task/new")]
             NewTaskPage {},
             #[route("/task/:id")]

@@ -1,18 +1,22 @@
 use dioxus::prelude::*;
 use crate::Route;
 use crate::types::{
-    Organization, OrganizationMember, OrgProjectAffiliation, OrgRoleRuleItem, User,
+    Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation, User,
 };
 use crate::backend::app_endpoints::{
-    delete_organization, remove_organization_member,
-    revoke_organization_member_role, revoke_org_role_project_access,
-    set_org_role_project_access,
+    cancel_organization_invitation, delete_organization, remove_organization_member,
+    revoke_organization_member_role,
 };
 use super::modals::{
-    AssignMemberRoleModal, ConfirmActiveTasksWarningModal, CreateOrgRoleModal,
-    InviteOrgMemberModal, TransferOrgGovernanceModal,
+    AssignMemberRoleModal, ConfirmActiveTasksWarningModal, CreateOrgProjectModal,
+    CreateOrgRoleModal, InviteOrgMemberModal, TransferOrgGovernanceModal,
 };
 use crate::components::dashboard::ConfirmDeleteModal;
+
+#[derive(Clone, PartialEq, Eq)]
+enum PendingWarningAction {
+    RevokeRole { user_id: i64, role: String },
+}
 
 #[component]
 pub fn OrganizationGovernorView(
@@ -20,7 +24,7 @@ pub fn OrganizationGovernorView(
     members: Vec<OrganizationMember>,
     roles: Vec<String>,
     affiliated_projects: Vec<OrgProjectAffiliation>,
-    role_rules: Vec<OrgRoleRuleItem>,
+    pending_invitations: Vec<OrganizationPendingInvite>,
     all_users: Vec<User>,
     on_refresh: EventHandler<()>,
 ) -> Element {
@@ -28,14 +32,9 @@ pub fn OrganizationGovernorView(
     let org_name = organization.name.clone();
     let current_gov_id = organization.governing_user_id;
 
-#[derive(Clone, PartialEq, Eq)]
-enum PendingWarningAction {
-    RevokeRole { user_id: i64, role: String },
-    RevokeRule { project_id: i64, org_role: String },
-}
-
     // Modals state
     let mut show_invite_modal = use_signal(|| false);
+    let mut show_create_project_modal = use_signal(|| false);
     let mut show_create_role_modal = use_signal(|| false);
     let mut show_transfer_modal = use_signal(|| false);
     let mut show_delete_modal = use_signal(|| false);
@@ -44,17 +43,6 @@ enum PendingWarningAction {
     // Warning confirmation modal state for active tasks
     let mut pending_warning = use_signal(|| Option::<(String, PendingWarningAction)>::None);
     let mut is_warning_loading = use_signal(|| false);
-
-    // New Project Access Rule form state
-    let mut new_rule_project_id = use_signal(|| {
-        affiliated_projects.first().map(|p| p.project_id)
-    });
-    let mut new_rule_org_role = use_signal(|| {
-        roles.first().cloned().unwrap_or_else(|| "member".to_string())
-    });
-    let mut new_rule_project_role = use_signal(|| "member".to_string());
-    let mut rule_error = use_signal(|| Option::<String>::None);
-    let mut is_adding_rule = use_signal(|| false);
 
     // Delete organization state
     let mut is_deleting = use_signal(|| false);
@@ -92,24 +80,11 @@ enum PendingWarningAction {
         });
     };
 
-    // Handler to revoke project role rule
-    let handle_revoke_rule = move |(pid, o_role): (i64, String)| {
-        let o_role_clone = o_role.clone();
+    // Handler to cancel pending invitation
+    let handle_cancel_invite = move |invited_uid: i64| {
         spawn(async move {
-            match revoke_org_role_project_access(pid, org_id, o_role.clone(), false).await {
-                Ok(_) => on_refresh.call(()),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if err_str.contains("Active task impact warning") {
-                        pending_warning.set(Some((
-                            err_str,
-                            PendingWarningAction::RevokeRule {
-                                project_id: pid,
-                                org_role: o_role_clone,
-                            },
-                        )));
-                    }
-                }
+            if cancel_organization_invitation(org_id, invited_uid).await.is_ok() {
+                on_refresh.call(());
             }
         });
     };
@@ -122,45 +97,12 @@ enum PendingWarningAction {
                     PendingWarningAction::RevokeRole { user_id, role } => {
                         let _ = revoke_organization_member_role(org_id, user_id, role, true).await;
                     }
-                    PendingWarningAction::RevokeRule { project_id, org_role } => {
-                        let _ = revoke_org_role_project_access(project_id, org_id, org_role, true).await;
-                    }
                 }
                 is_warning_loading.set(false);
                 pending_warning.set(None);
                 on_refresh.call(());
             });
         }
-    };
-
-    // Handler to add new project access rule
-    let handle_add_rule = move |_| {
-        let pid = match *new_rule_project_id.read() {
-            Some(id) => id,
-            None => {
-                rule_error.set(Some("Please select an affiliated project.".to_string()));
-                return;
-            }
-        };
-
-        let o_role = new_rule_org_role.read().clone();
-        let p_role = new_rule_project_role.read().clone();
-
-        is_adding_rule.set(true);
-        rule_error.set(None);
-
-        spawn(async move {
-            match set_org_role_project_access(pid, org_id, o_role, p_role).await {
-                Ok(_) => {
-                    is_adding_rule.set(false);
-                    on_refresh.call(());
-                }
-                Err(e) => {
-                    is_adding_rule.set(false);
-                    rule_error.set(Some(e.to_string()));
-                }
-            }
-        });
     };
 
     rsx! {
@@ -179,17 +121,23 @@ enum PendingWarningAction {
                         }
                     }
                     div { style: "display: flex; gap: 10px; flex-wrap: wrap;",
+                        Link {
+                            to: Route::OrganizationRolesPage { organization_id: org_id },
+                            class: "btn-task-edit",
+                            style: "text-decoration: none;",
+                            "🏷 Manage Roles & Rules →"
+                        }
                         button {
                             r#type: "button",
-                            class: "btn-task-edit",
-                            onclick: move |_| show_invite_modal.set(true),
-                            "👥 + Invite Member"
+                            class: "btn-task-save",
+                            onclick: move |_| show_create_project_modal.set(true),
+                            "+ New Project"
                         }
                         button {
                             r#type: "button",
                             class: "btn-task-cancel",
-                            onclick: move |_| show_create_role_modal.set(true),
-                            "🏷 + New Custom Role"
+                            onclick: move |_| show_invite_modal.set(true),
+                            "👥 + Invite Member"
                         }
                     }
                 }
@@ -197,31 +145,134 @@ enum PendingWarningAction {
                 // Stats row
                 div { style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 8px;",
                     div { style: "background-color: var(--bg-surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 12px;",
-                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Total Members" }
+                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Members" }
                         div { style: "font-size: var(--font-size-containerheader-medium); font-weight: var(--font-weight-bold); color: var(--text-primary); margin-top: 4px;", "{members.len()}" }
                     }
                     div { style: "background-color: var(--bg-surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 12px;",
-                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Defined Roles" }
+                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Custom Roles" }
                         div { style: "font-size: var(--font-size-containerheader-medium); font-weight: var(--font-weight-bold); color: var(--text-primary); margin-top: 4px;", "{roles.len()}" }
                     }
                     div { style: "background-color: var(--bg-surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 12px;",
-                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Affiliated Projects" }
+                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Active Projects" }
                         div { style: "font-size: var(--font-size-containerheader-medium); font-weight: var(--font-weight-bold); color: var(--text-primary); margin-top: 4px;", "{affiliated_projects.len()}" }
                     }
                     div { style: "background-color: var(--bg-surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 12px;",
-                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Role Access Rules" }
-                        div { style: "font-size: var(--font-size-containerheader-medium); font-weight: var(--font-weight-bold); color: var(--text-primary); margin-top: 4px;", "{role_rules.len()}" }
+                        div { style: "font-size: var(--font-size-meta); color: var(--text-muted); text-transform: uppercase; font-weight: var(--font-weight-bold);", "Pending Invites" }
+                        div { style: "font-size: var(--font-size-containerheader-medium); font-weight: var(--font-weight-bold); color: var(--text-primary); margin-top: 4px;", "{pending_invitations.len()}" }
                     }
                 }
             }
 
-            // Section 1: Member Directory & Multi-Role Assignment
+            // Section 1: Active Organization Projects
             div { class: "dashboard-panel",
-                div { style: "display: flex; justify-content: space-between; align-items: center;",
+                div { style: "display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;",
+                    div {
+                        h2 { class: "dashboard-panel-title", style: "margin: 0;", "Active Organization Projects ({affiliated_projects.len()})" }
+                        p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
+                            "Projects affiliated with or owned by this organization. Manage tasks or configure organization participation."
+                        }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn-action-sm",
+                        onclick: move |_| show_create_project_modal.set(true),
+                        "+ Create Project for {organization.name}"
+                    }
+                }
+
+                if affiliated_projects.is_empty() {
+                    p { class: "empty-description", "No projects are affiliated with this organization yet. Create one above to get started!" }
+                } else {
+                    div { class: "project-card-list",
+                        for p in &affiliated_projects {
+                            div { key: "{p.project_id}", class: "project-card",
+                                div { style: "display: flex; justify-content: space-between; align-items: flex-start;",
+                                    Link {
+                                        to: Route::ProjectTasksPage { project_id: p.project_id },
+                                        class: "project-card-title",
+                                        "{p.project_name}"
+                                    }
+                                    span { class: "task-detail-status status-accepted badge-sm",
+                                        "Rel: {p.relationship_type}"
+                                    }
+                                }
+                                div { class: "project-card-meta",
+                                    span { "Max Role Ceiling: " strong { "{p.max_granted_role}" } }
+                                    div { style: "display: flex; gap: 8px; align-items: center;",
+                                        Link {
+                                            to: Route::ProjectManagePage { project_id: p.project_id },
+                                            class: "btn-action-sm",
+                                            style: "text-decoration: none;",
+                                            "⚙ Manage Access"
+                                        }
+                                        Link {
+                                            to: Route::ProjectTasksPage { project_id: p.project_id },
+                                            style: "color: var(--primary); text-decoration: none; font-weight: var(--font-weight-bold);",
+                                            "Open Board →"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section 2: Outgoing Pending Invitations
+            if !pending_invitations.is_empty() {
+                div { class: "dashboard-panel",
+                    h2 { class: "dashboard-panel-title", "Outgoing Pending Invitations ({pending_invitations.len()})" }
+                    p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
+                        "Users who have been invited to join this organization but have not yet accepted."
+                    }
+                    div { style: "display: flex; flex-direction: column; gap: 10px; margin-top: 6px;",
+                        for inv in pending_invitations.iter() {
+                            {
+                                let target_uid = inv.invited_user_id;
+                                rsx! {
+                                    div { key: "{target_uid}", class: "inbox-item",
+                                        div { style: "display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;",
+                                            div { style: "display: flex; gap: 10px; align-items: center;",
+                                                span { class: "inbox-item-title", "{inv.invited_user_name}" }
+                                                span { class: "inbox-item-meta", "{inv.invited_user_email}" }
+                                                span { class: "task-detail-status status-suggested badge-sm", "Role: {inv.role}" }
+                                            }
+                                            button {
+                                                r#type: "button",
+                                                class: "btn-action-sm",
+                                                style: "color: var(--danger); border-color: var(--danger);",
+                                                onclick: move |_| handle_cancel_invite(target_uid),
+                                                "Cancel Invitation"
+                                            }
+                                        }
+                                        if !inv.message.is_empty() {
+                                            p { style: "margin: 4px 0 0; font-size: var(--font-size-body-sm); color: var(--text-secondary);",
+                                                "Note: \"{inv.message}\""
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section 3: Members Overview & Role Quick Assignment
+            div { class: "dashboard-panel",
+                div { style: "display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;",
                     div {
                         h2 { class: "dashboard-panel-title", style: "margin: 0;", "Organization Members ({members.len()})" }
                         p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
-                            "Assign multiple functional roles to members so they can participate in corresponding project activities."
+                            "Current members in {organization.name}. For full table filtering and access rule configuration, visit Role Management."
+                        }
+                    }
+                    div { style: "display: flex; gap: 8px;",
+                        Link {
+                            to: Route::OrganizationRolesPage { organization_id: org_id },
+                            class: "btn-action-sm",
+                            style: "text-decoration: none;",
+                            "🏷 Open Role Management & Filters →"
                         }
                     }
                 }
@@ -301,178 +352,7 @@ enum PendingWarningAction {
                 }
             }
 
-            // Section 2: Defined Organization Roles
-            div { class: "dashboard-panel",
-                div { style: "display: flex; justify-content: space-between; align-items: center;",
-                    div {
-                        h2 { class: "dashboard-panel-title", style: "margin: 0;", "Custom Functional Roles ({roles.len()})" }
-                        p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
-                            "Define organizational specializations like engineering, support, marketing, or compliance."
-                        }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn-action-sm",
-                        onclick: move |_| show_create_role_modal.set(true),
-                        "+ Define New Role"
-                    }
-                }
-
-                div { style: "display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;",
-                    for r in &roles {
-                        span {
-                            key: "{r}",
-                            style: "background-color: var(--bg-surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 6px 12px; font-weight: var(--font-weight-bold); font-size: var(--font-size-body-sm); color: var(--text-primary);",
-                            "🏷 {r}"
-                        }
-                    }
-                }
-            }
-
-            // Section 3: Project Role Access Rules
-            div { class: "dashboard-panel",
-                div {
-                    h2 { class: "dashboard-panel-title", "Role-to-Project Access Rules ({role_rules.len()})" }
-                    p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
-                        "Map organizational roles to access levels in affiliated projects. Members with matching roles automatically inherit these grants (subject to project privilege ceilings)."
-                    }
-                }
-
-                // Existing rules list
-                if role_rules.is_empty() {
-                    p { class: "empty-description", "No project access rules configured yet. Define one below!" }
-                } else {
-                    div { style: "display: flex; flex-direction: column; gap: 8px;",
-                        for rule in role_rules.iter() {
-                            {
-                                let pid = rule.project_id;
-                                let o_role = rule.org_role.clone();
-                                let o_role_del = rule.org_role.clone();
-                                rsx! {
-                                    div { key: "{pid}-{o_role}", class: "inbox-item",
-                                        div { style: "display: flex; justify-content: space-between; align-items: center;",
-                                            div { style: "display: flex; gap: 10px; align-items: center; flex-wrap: wrap;",
-                                                span { class: "inbox-item-title", "{rule.project_name}" }
-                                                span { style: "color: var(--text-muted); font-size: var(--font-size-meta);", "Org Role:" }
-                                                span { style: "background-color: var(--primary-bg); color: var(--primary); padding: 2px 8px; border-radius: var(--radius-sm); font-weight: var(--font-weight-bold); font-size: var(--font-size-meta);",
-                                                    "{rule.org_role}"
-                                                }
-                                                span { style: "color: var(--text-muted); font-size: var(--font-size-meta);", "➔ Project Role:" }
-                                                span { class: "task-detail-status status-accepted badge-sm",
-                                                    "{rule.project_role}"
-                                                }
-                                            }
-                                            button {
-                                                r#type: "button",
-                                                class: "btn-action-sm",
-                                                style: "color: var(--danger); border-color: var(--danger);",
-                                                onclick: move |_| handle_revoke_rule((pid, o_role_del.clone())),
-                                                "Revoke Rule"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Add new access rule form
-                if !affiliated_projects.is_empty() && !roles.is_empty() {
-                    div { style: "border-top: 1px solid var(--border-subtle); padding-top: 16px; margin-top: 8px;",
-                        h3 { style: "margin: 0 0 12px 0; font-size: var(--font-size-cardheader-small); color: var(--text-primary);",
-                            "+ Add Project Access Rule"
-                        }
-                        if let Some(err) = &*rule_error.read() {
-                            div { class: "task-detail-error", style: "margin-bottom: 12px;", "{err}" }
-                        }
-                        div { style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: flex-end;",
-                            div {
-                                label { class: "form-label", "Affiliated Project" }
-                                select {
-                                    class: "task-status-select",
-                                    onchange: move |e| {
-                                        if let Ok(id) = e.value().parse::<i64>() {
-                                            new_rule_project_id.set(Some(id));
-                                        }
-                                    },
-                                    for p in &affiliated_projects {
-                                        option { value: "{p.project_id}", "{p.project_name} (Max: {p.max_granted_role})" }
-                                    }
-                                }
-                            }
-                            div {
-                                label { class: "form-label", "Organization Role" }
-                                select {
-                                    class: "task-status-select",
-                                    value: "{new_rule_org_role}",
-                                    onchange: move |e| new_rule_org_role.set(e.value()),
-                                    for r in &roles {
-                                        option { value: "{r}", "{r}" }
-                                    }
-                                }
-                            }
-                            div {
-                                label { class: "form-label", "Project Role to Grant" }
-                                select {
-                                    class: "task-status-select",
-                                    value: "{new_rule_project_role}",
-                                    onchange: move |e| new_rule_project_role.set(e.value()),
-                                    option { value: "viewer", "Viewer (Read Only)" }
-                                    option { value: "member", "Member (Create & Edit Tasks)" }
-                                    option { value: "admin", "Admin (Manage Settings & Delete)" }
-                                }
-                            }
-                            button {
-                                r#type: "button",
-                                class: "btn-task-save",
-                                disabled: *is_adding_rule.read(),
-                                onclick: handle_add_rule,
-                                if *is_adding_rule.read() { "Granting..." } else { "Grant Access Rule" }
-                            }
-                        }
-                    }
-                } else if affiliated_projects.is_empty() {
-                    p { style: "font-size: var(--font-size-meta); color: var(--text-muted); font-style: italic;",
-                        "No affiliated projects yet. Project leaders can affiliate this organization from their project dashboard."
-                    }
-                }
-            }
-
-            // Section 4: Affiliated Projects List
-            div { class: "dashboard-panel",
-                h2 { class: "dashboard-panel-title", "Affiliated Projects ({affiliated_projects.len()})" }
-                if affiliated_projects.is_empty() {
-                    p { class: "empty-description", "This organization is not affiliated with any projects yet." }
-                } else {
-                    div { class: "project-card-list",
-                        for p in &affiliated_projects {
-                            div { key: "{p.project_id}", class: "project-card",
-                                div { style: "display: flex; justify-content: space-between; align-items: flex-start;",
-                                    Link {
-                                        to: Route::ProjectTasksPage { project_id: p.project_id },
-                                        class: "project-card-title",
-                                        "{p.project_name}"
-                                    }
-                                    span { class: "task-detail-status status-accepted badge-sm",
-                                        "Rel: {p.relationship_type}"
-                                    }
-                                }
-                                div { class: "project-card-meta",
-                                    span { "Max Role Ceiling: " strong { "{p.max_granted_role}" } }
-                                    Link {
-                                        to: Route::ProjectTasksPage { project_id: p.project_id },
-                                        style: "color: var(--primary); text-decoration: none; font-weight: var(--font-weight-bold);",
-                                        "Open Board →"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Section 5: Governance & Danger Zone
+            // Section 4: Governance & Danger Zone
             div { class: "dashboard-panel", style: "border: 1px solid var(--danger-bg);",
                 h2 { class: "dashboard-panel-title", style: "color: var(--danger);", "Governance & Danger Zone" }
                 div { style: "display: flex; flex-direction: column; gap: 16px;",
@@ -528,6 +408,18 @@ enum PendingWarningAction {
                     on_close: move |_| show_invite_modal.set(false),
                     on_invited: move |_| {
                         show_invite_modal.set(false);
+                        on_refresh.call(());
+                    },
+                }
+            }
+
+            if *show_create_project_modal.read() {
+                CreateOrgProjectModal {
+                    organization_id: org_id,
+                    organization_name: org_name.clone(),
+                    on_close: move |_| show_create_project_modal.set(false),
+                    on_created: move |_| {
+                        show_create_project_modal.set(false);
                         on_refresh.call(());
                     },
                 }
