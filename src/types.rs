@@ -43,7 +43,7 @@ impl std::str::FromStr for TaskStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct User {
     pub id: i64,
@@ -61,17 +61,139 @@ impl Default for User {
     }
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Task {
     pub id: i64,
+    pub project_id: i64,
     pub title: String,
-    pub author: i64,
+    pub author: Option<i64>,
     pub author_name: String,
     pub description: String,
     pub status: TaskStatus,
     pub assignees: Vec<User>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct TaskMessage {
+    pub task_id: i64,
+    pub msg_id: i64,
+    pub author_id: Option<i64>,
+    pub author_name: String,
+    pub created_at: i64,
+    pub msg: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct Organization {
+    pub id: i64,
+    pub name: String,
+    pub slug: String,
+    pub governing_user_id: i64,
+    pub governing_user_name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct OrganizationMember {
+    pub organization_id: i64,
+    pub user_id: i64,
+    pub user_name: String,
+    pub user_email: String,
+    pub role: String,
+    pub joined_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct Project {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub owner_org_id: Option<i64>,
+    pub owner_org_name: Option<String>,
+    pub leader_id: i64,
+    pub leader_name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct ProjectMember {
+    pub project_id: i64,
+    pub user_id: i64,
+    pub user_name: String,
+    pub user_email: String,
+    pub role: String,
+    pub granted_by_org_role: bool,
+    pub joined_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct ProjectOrgRoleAccess {
+    pub project_id: i64,
+    pub organization_id: i64,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectInvitation {
+    pub project_id: i64,
+    pub project_name: String,
+    pub invited_user_id: i64,
+    pub invited_by: Option<i64>,
+    pub invited_by_name: String,
+    pub role: String,
+    pub message: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OrganizationInvitation {
+    pub organization_id: i64,
+    pub organization_name: String,
+    pub invited_user_id: i64,
+    pub invited_by: Option<i64>,
+    pub invited_by_name: String,
+    pub role: String,
+    pub message: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GovernanceTransferOffer {
+    pub organization_id: i64,
+    pub organization_name: String,
+    pub requested_new_governor: i64,
+    pub current_governor_name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectLeadershipTransferOffer {
+    pub project_id: i64,
+    pub project_name: String,
+    pub requested_new_leader: i64,
+    pub current_leader_name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UserInbox {
+    pub project_invitations: Vec<ProjectInvitation>,
+    pub org_invitations: Vec<OrganizationInvitation>,
+    pub governance_transfers: Vec<GovernanceTransferOffer>,
+    pub leadership_transfers: Vec<ProjectLeadershipTransferOffer>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DashboardData {
+    pub inbox: UserInbox,
+    pub projects: Vec<Project>,
+    pub organizations: Vec<Organization>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

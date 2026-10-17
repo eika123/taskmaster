@@ -23,7 +23,14 @@ pub fn Navbar() -> Element {
                 }
                 nav { class: "navbar-links",
                     Link { to: Route::LandingPage {}, class: "nav-link", "Home" }
-                    Link { to: Route::TasksDashboardPage {}, class: "nav-link", "Task Board" }
+                    if current_user.is_some() {
+                        Link { to: Route::DashboardPage {}, class: "nav-link", "Dashboard" }
+                        Link {
+                            to: Route::TasksDashboardPage {},
+                            class: "nav-link",
+                            "My Tasks"
+                        }
+                    }
                 }
 
                 div { class: "navbar-actions",
