@@ -97,7 +97,6 @@ pub struct Organization {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct OrganizationMember {
     pub organization_id: i64,
     pub user_id: i64,
@@ -105,6 +104,8 @@ pub struct OrganizationMember {
     pub user_email: String,
     pub role: String,
     pub joined_at: i64,
+    #[serde(default)]
+    pub roles: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -174,6 +175,25 @@ pub struct ActiveTaskImpact {
     pub task_id: i64,
     pub task_title: String,
     pub task_status: TaskStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct OrgProjectAffiliation {
+    pub project_id: i64,
+    pub project_name: String,
+    pub relationship_type: String,
+    pub max_granted_role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct OrgRoleRuleItem {
+    pub project_id: i64,
+    pub project_name: String,
+    pub organization_id: i64,
+    pub org_role: String,
+    pub project_role: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -25,6 +25,8 @@ pub enum Route {
         #[layout(AuthLayout)]
             #[route("/dashboard")]
             DashboardPage {},
+            #[route("/organizations/:organization_id")]
+            OrganizationDashboardPage { organization_id: i64 },
             #[route("/tasks")]
             TasksDashboardPage {},
             #[route("/projects/tasks/:project_id")]

@@ -7,6 +7,7 @@ use crate::backend::app_endpoints::{
 use crate::types::TaskStatus;
 use super::column::TaskColumn;
 use super::modals::{InlineCreateTaskModal, InlineInviteModal};
+use super::org_modal::ProjectOrganizationsModal;
 use crate::components::dashboard::ConfirmDeleteModal;
 
 #[component]
@@ -68,6 +69,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
 
     let mut show_new_task = use_signal(|| false);
     let mut show_invite_modal = use_signal(|| false);
+    let mut show_orgs_modal = use_signal(|| false);
     let mut show_delete_modal = use_signal(|| false);
     let mut is_deleting_project = use_signal(|| false);
     let mut delete_proj_err = use_signal(|| Option::<String>::None);
@@ -167,6 +169,15 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                         button {
                             r#type: "button",
                             class: "btn-task-cancel",
+                            onclick: move |_| {
+                                let curr = *show_orgs_modal.read();
+                                show_orgs_modal.set(!curr);
+                            },
+                            "🏢 Organizations"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "btn-task-cancel",
                             style: "color: var(--danger); border-color: var(--danger-bg);",
                             onclick: move |_| {
                                 show_delete_modal.set(true);
@@ -241,6 +252,21 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                     project_id: pid.unwrap(),
                     current_users: current_users.clone(),
                     on_close: move |_| show_invite_modal.set(false),
+                }
+            }
+
+            if *show_orgs_modal.read() {
+                if let (Some(target_pid), Some(pinfo)) = (pid, &project_info) {
+                    {
+                        let pname = pinfo.name.clone();
+                        rsx! {
+                            ProjectOrganizationsModal {
+                                project_id: target_pid,
+                                project_name: pname,
+                                on_close: move |_| show_orgs_modal.set(false),
+                            }
+                        }
+                    }
                 }
             }
 

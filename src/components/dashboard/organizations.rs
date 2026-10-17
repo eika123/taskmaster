@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use crate::Route;
 use crate::types::Organization;
 
 #[component]
@@ -22,21 +23,24 @@ pub fn DashboardOrganizations(
                     for org in organizations {
                         {
                             let is_governor = current_user_id == Some(org.governing_user_id);
-                            let org_clone = org.clone();
+                            let oid = org.id;
                             rsx! {
-                                div { key: "{org.id}", class: "inbox-item",
+                                div { key: "{oid}", class: "inbox-item",
                                     div { class: "inbox-item-header",
                                         div { style: "display: flex; gap: 8px; align-items: center;",
-                                            span { class: "inbox-item-title", "{org.name}" }
+                                            Link {
+                                                to: Route::OrganizationDashboardPage { organization_id: oid },
+                                                class: "inbox-item-title",
+                                                style: "text-decoration: none; color: inherit; font-weight: var(--font-weight-bold);",
+                                                "{org.name}"
+                                            }
                                             span { class: "inbox-item-meta", "@{org.slug}" }
                                         }
-                                        if is_governor {
-                                            button {
-                                                r#type: "button",
-                                                class: "btn-action-sm",
-                                                onclick: move |_| on_manage.call(org_clone.clone()),
-                                                "⚙ Manage"
-                                            }
+                                        Link {
+                                            to: Route::OrganizationDashboardPage { organization_id: oid },
+                                            class: "btn-action-sm",
+                                            style: "text-decoration: none;",
+                                            if is_governor { "⚙ Manage" } else { "View Dashboard →" }
                                         }
                                     }
                                     div { class: "inbox-item-msg",

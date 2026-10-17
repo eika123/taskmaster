@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::types::{Organization, OrganizationMember};
+use crate::types::{Organization, OrganizationMember, OrgProjectAffiliation, OrgRoleRuleItem};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -131,9 +131,23 @@ pub async fn get_organization_members(
     organization_id: i64,
 ) -> Result<Vec<OrganizationMember>, ServerFnError> {
     let pool = get_db().await;
-    let members = sqlx::query_as::<_, OrganizationMember>(
+    #[derive(sqlx::FromRow)]
+    struct MemberRow {
+        organization_id: i64,
+        user_id: i64,
+        user_name: String,
+        user_email: String,
+        role: String,
+        joined_at: i64,
+        roles_csv: Option<String>,
+    }
+
+    let rows = sqlx::query_as::<_, MemberRow>(
         "SELECT om.organization_id, om.user_id, u.name AS user_name, u.email AS user_email,
-                om.role, om.joined_at
+                om.role, om.joined_at,
+                (SELECT GROUP_CONCAT(omr.role, ',')
+                 FROM organization_member_roles omr
+                 WHERE omr.organization_id = om.organization_id AND omr.user_id = om.user_id) AS roles_csv
          FROM organization_members om
          INNER JOIN user u ON om.user_id = u.id
          WHERE om.organization_id = $1
@@ -143,6 +157,30 @@ pub async fn get_organization_members(
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch organization members: {e}")))?;
+
+    let members = rows
+        .into_iter()
+        .map(|r| {
+            let roles = r
+                .roles_csv
+                .map(|csv| {
+                    csv.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            OrganizationMember {
+                organization_id: r.organization_id,
+                user_id: r.user_id,
+                user_name: r.user_name,
+                user_email: r.user_email,
+                role: r.role,
+                joined_at: r.joined_at,
+                roles,
+            }
+        })
+        .collect();
 
     Ok(members)
 }
@@ -580,4 +618,62 @@ pub async fn get_organization_roles(
 
     Ok(roles)
 }
+
+#[server]
+pub async fn get_organization(organization_id: i64) -> Result<Organization, ServerFnError> {
+    let pool = get_db().await;
+    let org = sqlx::query_as::<_, Organization>(
+        "SELECT o.id, o.name, o.slug, o.governing_user_id, u.name AS governing_user_name, o.created_at
+         FROM organization o
+         INNER JOIN user u ON o.governing_user_id = u.id
+         WHERE o.id = $1",
+    )
+    .bind(organization_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Organization not found: {e}")))?;
+
+    Ok(org)
+}
+
+#[server]
+pub async fn get_organization_affiliated_projects(
+    organization_id: i64,
+) -> Result<Vec<OrgProjectAffiliation>, ServerFnError> {
+    let pool = get_db().await;
+    let projects = sqlx::query_as::<_, OrgProjectAffiliation>(
+        "SELECT po.project_id, p.name AS project_name, po.relationship_type, po.max_granted_role
+         FROM project_organizations po
+         INNER JOIN project p ON po.project_id = p.id
+         WHERE po.organization_id = $1
+         ORDER BY p.name ASC",
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch affiliated projects: {e}")))?;
+
+    Ok(projects)
+}
+
+#[server]
+pub async fn get_organization_role_rules(
+    organization_id: i64,
+) -> Result<Vec<OrgRoleRuleItem>, ServerFnError> {
+    let pool = get_db().await;
+    let rules = sqlx::query_as::<_, OrgRoleRuleItem>(
+        "SELECT pora.project_id, p.name AS project_name, pora.organization_id, pora.org_role, pora.project_role
+         FROM project_org_role_access pora
+         INNER JOIN project p ON pora.project_id = p.id
+         WHERE pora.organization_id = $1
+         ORDER BY p.name ASC, pora.org_role ASC",
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch role rules: {e}")))?;
+
+    Ok(rules)
+}
+
 

@@ -10,6 +10,7 @@ pub mod register;
 pub mod login;
 pub mod navbar;
 pub mod dashboard;
+pub mod organizations;
 
 pub use auth::*;
 pub use landing::*;
@@ -20,4 +21,5 @@ pub use register::*;
 pub use login::*;
 pub use navbar::*;
 pub use dashboard::*;
+pub use organizations::*;
 

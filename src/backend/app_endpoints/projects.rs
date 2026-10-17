@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::types::{Project, ProjectMember, ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule};
+use crate::types::{Organization, Project, ProjectMember, ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -821,6 +821,28 @@ pub async fn set_active_project_hat(
         .map_err(|e| ServerFnError::new(format!("Commit failed: {e}")))?;
 
     Ok(())
+}
+
+#[server]
+pub async fn get_available_organizations_for_project(
+    project_id: i64,
+) -> Result<Vec<Organization>, ServerFnError> {
+    let pool = get_db().await;
+    let orgs = sqlx::query_as::<_, Organization>(
+        "SELECT o.id, o.name, o.slug, o.governing_user_id, u.name AS governing_user_name, o.created_at
+         FROM organization o
+         INNER JOIN user u ON o.governing_user_id = u.id
+         WHERE o.id NOT IN (
+             SELECT po.organization_id FROM project_organizations po WHERE po.project_id = $1
+         )
+         ORDER BY o.name ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch available organizations: {e}")))?;
+
+    Ok(orgs)
 }
 
 
