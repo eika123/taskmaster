@@ -23,8 +23,12 @@ pub enum Route {
         RegisterPage {},
 
         #[layout(AuthLayout)]
+            #[route("/dashboard")]
+            DashboardPage {},
             #[route("/tasks")]
             TasksDashboardPage {},
+            #[route("/projects/tasks/:project_id")]
+            ProjectTasksPage { project_id: i64 },
             #[route("/task/new")]
             NewTaskPage {},
             #[route("/task/:id")]
@@ -103,10 +107,19 @@ fn App() -> Element {
     }
 }
 
-// /// Task board dashboard page
+// /// My Tasks dashboard page (only tasks assigned to or authored by current user)
 #[component]
 fn TasksDashboardPage() -> Element {
     rsx! {
-        TaskView {}
+        TaskView { project_id: None }
     }
 }
+
+// /// Project-scoped Kanban board page
+#[component]
+fn ProjectTasksPage(project_id: i64) -> Element {
+    rsx! {
+        TaskView { project_id: Some(project_id) }
+    }
+}
+

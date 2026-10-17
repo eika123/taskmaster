@@ -9,7 +9,7 @@ pub mod tasks;
 pub mod register;
 pub mod login;
 pub mod navbar;
-
+pub mod dashboard;
 
 pub use auth::*;
 pub use landing::*;
@@ -19,3 +19,5 @@ pub use tasks::*;
 pub use register::*;
 pub use login::*;
 pub use navbar::*;
+pub use dashboard::*;
+
