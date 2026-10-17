@@ -12,10 +12,10 @@ pub async fn get_user_projects() -> Result<Vec<Project>, ServerFnError> {
     let pool = get_db().await;
 
     let projects = sqlx::query_as::<_, Project>(
-        "SELECT p.id, p.name, p.description, p.owner_org_id, o.name AS owner_org_name,
+        "SELECT p.id, p.name, p.description, p.owner_org_id, org.name AS owner_org_name,
                 p.leader_id, u.name AS leader_name, p.created_at
          FROM project p
-         LEFT JOIN organization o ON p.owner_org_id = o.id
+         LEFT JOIN organization org ON p.owner_org_id = org.id
          INNER JOIN user u ON p.leader_id = u.id
          WHERE p.leader_id = $1
             OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $1)
@@ -33,10 +33,10 @@ pub async fn get_user_projects() -> Result<Vec<Project>, ServerFnError> {
 pub async fn get_project(project_id: i64) -> Result<Project, ServerFnError> {
     let pool = get_db().await;
     let proj = sqlx::query_as::<_, Project>(
-        "SELECT p.id, p.name, p.description, p.owner_org_id, o.name AS owner_org_name,
+        "SELECT p.id, p.name, p.description, p.owner_org_id, org.name AS owner_org_name,
                 p.leader_id, u.name AS leader_name, p.created_at
          FROM project p
-         LEFT JOIN organization o ON p.owner_org_id = o.id
+         LEFT JOIN organization org ON p.owner_org_id = org.id
          INNER JOIN user u ON p.leader_id = u.id
          WHERE p.id = $1",
     )
@@ -110,15 +110,49 @@ pub async fn delete_project(project_id: i64) -> Result<(), ServerFnError> {
         ));
     }
 
+    // SQLite's ON DELETE CASCADE automatically cascades deletion to tasks,
+    // assignments, messages, and member associations. The database trigger
+    // `prevent_delete_populated_project` guarantees that projects with other members
+    // cannot be deleted.
     sqlx::query("DELETE FROM project WHERE id = $1")
         .bind(project_id)
         .execute(pool)
         .await
         .map_err(|e| {
-            ServerFnError::new(format!(
-                "Cannot delete project: {e}. Ensure all other members are removed first."
-            ))
+            ServerFnError::new(format!("Cannot delete project: {e}."))
         })?;
+
+    Ok(())
+}
+
+#[server]
+pub async fn remove_project_member(
+    project_id: i64,
+    member_user_id: i64,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let leader_id: i64 = sqlx::query_scalar("SELECT leader_id FROM project WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
+
+    if user.id != member_user_id && user.id != leader_id {
+        return Err(ServerFnError::new(
+            "Only the project leader can remove other members.",
+        ));
+    }
+
+    // The database trigger `prevent_remove_project_leader` will automatically block
+    // the project leader from removing themselves unless leadership is transferred first!
+    sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2")
+        .bind(project_id)
+        .bind(member_user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Cannot remove member: {e}")))?;
 
     Ok(())
 }

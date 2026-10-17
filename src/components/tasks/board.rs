@@ -67,6 +67,10 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
 
     let mut show_new_task = use_signal(|| false);
     let mut show_invite_modal = use_signal(|| false);
+    let mut delete_proj_err = use_signal(|| Option::<String>::None);
+    let auth = use_context::<crate::components::AuthState>();
+    let current_user_id = auth.user.read().as_ref().map(|u| u.id);
+    let nav = use_navigator();
 
     let on_dismiss_handler = move |task_id: i64| {
         task_list.with_mut(|tasks| {
@@ -156,6 +160,29 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                             "👥 Invite Member"
                         }
                     }
+                    if pid.is_some() && project_info.as_ref().map(|p| p.leader_id) == current_user_id {
+                        button {
+                            r#type: "button",
+                            class: "btn-task-cancel",
+                            style: "color: var(--danger); border-color: var(--danger-bg);",
+                            onclick: move |_| {
+                                if let Some(target_pid) = pid {
+                                    let nav = nav.clone();
+                                    spawn(async move {
+                                        match crate::backend::app_endpoints::delete_project(target_pid).await {
+                                            Ok(_) => {
+                                                nav.push(crate::Route::DashboardPage {});
+                                            }
+                                            Err(e) => {
+                                                delete_proj_err.set(Some(e.to_string()));
+                                            }
+                                        }
+                                    });
+                                }
+                            },
+                            "🗑 Delete Project"
+                        }
+                    }
                     button {
                         r#type: "button",
                         class: "btn-create-task",
@@ -166,6 +193,12 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                         span { class: "btn-create-icon", "+" }
                         " New Task"
                     }
+                }
+            }
+
+            if let Some(err) = &*delete_proj_err.read() {
+                div { class: "task-detail-error", style: "padding: 8px 12px; margin-bottom: 16px;",
+                    "{err}"
                 }
             }
 

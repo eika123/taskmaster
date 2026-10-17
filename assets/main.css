@@ -766,6 +766,27 @@ body {
     display: inline-block;
 }
 
+.task-card-project-badge {
+    font-size: var(--font-size-badge);
+    color: var(--primary-light);
+    text-decoration: none;
+    font-weight: var(--font-weight-normal);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: fit-content;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.15s ease;
+}
+
+.task-card-project-badge:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
 .task-card-title {
     margin: 0;
     font-size: var(--font-size-cardheader-medium);

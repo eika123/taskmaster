@@ -141,6 +141,39 @@ pub async fn get_organization_members(
 }
 
 #[server]
+pub async fn remove_organization_member(
+    organization_id: i64,
+    member_user_id: i64,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let governing_id: i64 =
+        sqlx::query_scalar("SELECT governing_user_id FROM organization WHERE id = $1")
+            .bind(organization_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Organization not found: {e}")))?;
+
+    if user.id != member_user_id && user.id != governing_id {
+        return Err(ServerFnError::new(
+            "Only the organization governor can remove other members.",
+        ));
+    }
+
+    // The database trigger `prevent_remove_governing_user` will automatically block
+    // the governing user from removing themselves unless governance is transferred first!
+    sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2")
+        .bind(organization_id)
+        .bind(member_user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Cannot remove member: {e}")))?;
+
+    Ok(())
+}
+
+#[server]
 pub async fn invite_user_to_organization(
     organization_id: i64,
     invited_user_id: i64,
@@ -227,8 +260,14 @@ pub async fn respond_to_organization_invitation(
     Ok(())
 }
 
+/// Initiates governance transfer / stepping down as governor.
+///
+/// When the current governing user wishes to step down (seek relief from governing duties),
+/// they cannot simply leave or remove themselves due to the database trigger `prevent_remove_governing_user`.
+/// Instead, they nominate a successor member via this endpoint. The designated member receives a transfer
+/// offer in their inbox, and only upon acceptance does the governance role atomically transfer to the successor.
 #[server]
-pub async fn request_governance_transfer(
+pub async fn request_organization_governance_transfer(
     organization_id: i64,
     requested_new_governor: i64,
 ) -> Result<(), ServerFnError> {
@@ -261,8 +300,9 @@ pub async fn request_governance_transfer(
     Ok(())
 }
 
+
 #[server]
-pub async fn respond_governance_transfer(
+pub async fn respond_to_organization_governance_transfer_request(
     organization_id: i64,
     accept: bool,
 ) -> Result<(), ServerFnError> {

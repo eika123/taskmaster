@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use crate::backend::app_endpoints::{
-    respond_governance_transfer, respond_project_leadership_transfer,
+    respond_to_organization_governance_transfer_request, respond_project_leadership_transfer,
     respond_to_organization_invitation, respond_to_project_invitation,
 };
 use crate::types::UserInbox;
@@ -27,7 +27,9 @@ pub fn DashboardInbox(
             }
 
             if total_invites == 0 {
-                p { class: "empty-description", "Your message box is clear — no pending invites or transfers." }
+                p { class: "empty-description",
+                    "Your message box is clear — no pending invites or transfers."
+                }
             } else {
                 div { class: "inbox-list",
                     // 1. Project Invitations
@@ -125,7 +127,10 @@ pub fn DashboardInbox(
                         {
                             let oid = gov.organization_id;
                             rsx! {
-                                div { key: "gov-{oid}", class: "inbox-item", style: "border-left: 3px solid var(--primary);",
+                                div {
+                                    key: "gov-{oid}",
+                                    class: "inbox-item",
+                                    style: "border-left: 3px solid var(--primary);",
                                     div { class: "inbox-item-header",
                                         span { class: "inbox-item-title", "Governance Transfer Offer" }
                                     }
@@ -140,7 +145,7 @@ pub fn DashboardInbox(
                                             class: "btn-inbox-accept",
                                             onclick: move |_| {
                                                 spawn(async move {
-                                                    let _ = respond_governance_transfer(oid, true).await;
+                                                    let _ = respond_to_organization_governance_transfer_request(oid, true).await;
                                                     on_action.call(());
                                                 });
                                             },
@@ -151,7 +156,8 @@ pub fn DashboardInbox(
                                             class: "btn-inbox-decline",
                                             onclick: move |_| {
                                                 spawn(async move {
-                                                    let _ = respond_governance_transfer(oid, false).await;
+                                                    let _ = respond_to_organization_governance_transfer_request(oid, false)
+                                                        .await;
                                                     on_action.call(());
                                                 });
                                             },
@@ -168,7 +174,10 @@ pub fn DashboardInbox(
                         {
                             let pid = lead.project_id;
                             rsx! {
-                                div { key: "lead-{pid}", class: "inbox-item", style: "border-left: 3px solid var(--status-in_progress);",
+                                div {
+                                    key: "lead-{pid}",
+                                    class: "inbox-item",
+                                    style: "border-left: 3px solid var(--status-in_progress);",
                                     div { class: "inbox-item-header",
                                         span { class: "inbox-item-title", "Project Leadership Transfer Offer" }
                                     }

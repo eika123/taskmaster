@@ -65,6 +65,7 @@ impl Default for User {
 pub struct Task {
     pub id: i64,
     pub project_id: i64,
+    pub project_name: String,
     pub title: String,
     pub author: Option<i64>,
     pub author_name: String,

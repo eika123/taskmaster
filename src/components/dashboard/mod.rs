@@ -103,6 +103,7 @@ pub fn DashboardPage() -> Element {
                         DashboardProjects {
                             projects: data.projects,
                             on_invite: move |p| active_invite_proj.set(Some(p)),
+                            on_deleted: move |_| dashboard_resource.restart(),
                         }
                         DashboardOrganizations {
                             organizations: data.organizations,

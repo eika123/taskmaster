@@ -12,6 +12,7 @@ use crate::backend::database::get_db;
 pub(crate) struct RawTask {
     pub id: i64,
     pub project_id: i64,
+    pub project_name: Option<String>,
     pub title: String,
     pub author: Option<i64>,
     pub author_name: Option<String>,
@@ -86,10 +87,12 @@ pub async fn get_my_tasks(
     let pool = get_db().await;
 
     let raw_tasks = sqlx::query_as::<_, RawTask>(
-        "SELECT DISTINCT task.id, task.project_id, task.title, task.author,
+        "SELECT DISTINCT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
+                task.title, task.author,
                 COALESCE(u_author.name, 'Deleted User') AS author_name, 
                 task.description, task.status 
          FROM task 
+         LEFT JOIN project ON task.project_id = project.id
          LEFT JOIN user u_author ON task.author = u_author.id 
          LEFT JOIN assignments ON task.id = assignments.task_id
          WHERE (assignments.assigned_to = $1 OR task.author = $1)
@@ -148,6 +151,7 @@ pub async fn get_my_tasks(
             Task {
                 id: raw.id,
                 project_id: raw.project_id,
+                project_name: raw.project_name.unwrap_or_else(|| "Standalone".to_string()),
                 title: raw.title,
                 author: raw.author,
                 author_name: raw.author_name.unwrap_or_else(|| "Deleted User".to_string()),
@@ -179,10 +183,12 @@ pub async fn get_project_tasks(
     let pool = get_db().await;
 
     let raw_tasks = sqlx::query_as::<_, RawTask>(
-        "SELECT task.id, task.project_id, task.title, task.author,
+        "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
+                task.title, task.author,
                 COALESCE(user.name, 'Deleted User') AS author_name, 
                 task.description, task.status 
          FROM task 
+         LEFT JOIN project ON task.project_id = project.id
          LEFT JOIN user ON task.author = user.id 
          WHERE task.project_id = $1 AND task.id > $2 
          ORDER BY task.id ASC 
@@ -239,6 +245,7 @@ pub async fn get_project_tasks(
             Task {
                 id: raw.id,
                 project_id: raw.project_id,
+                project_name: raw.project_name.unwrap_or_else(|| "Standalone".to_string()),
                 title: raw.title,
                 author: raw.author,
                 author_name: raw.author_name.unwrap_or_else(|| "Deleted User".to_string()),
@@ -257,10 +264,12 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
     let pool = get_db().await;
 
     let raw = sqlx::query_as::<_, RawTask>(
-        "SELECT task.id, task.project_id, task.title, task.author,
+        "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
+                task.title, task.author,
                 COALESCE(user.name, 'Deleted User') AS author_name, 
                 task.description, task.status 
          FROM task 
+         LEFT JOIN project ON task.project_id = project.id
          LEFT JOIN user ON task.author = user.id 
          WHERE task.id = $1",
     )
@@ -284,6 +293,7 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
     Ok(Task {
         id: raw.id,
         project_id: raw.project_id,
+        project_name: raw.project_name.unwrap_or_else(|| "Standalone".to_string()),
         title: raw.title,
         author: raw.author,
         author_name: raw.author_name.unwrap_or_else(|| "Deleted User".to_string()),

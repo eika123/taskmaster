@@ -111,9 +111,21 @@ pub fn TaskPage(id: i64) -> Element {
 
     rsx! {
         div { class: "task-detail-container",
-            div { class: "task-detail-nav",
-                Link { to: Route::TasksDashboardPage {}, class: "btn-back-link",
-                    "← Back to Task Board"
+            div {
+                class: "task-detail-nav",
+                style: "display: flex; gap: 12px; align-items: center;",
+                Link { to: Route::TasksDashboardPage {}, class: "btn-back-link", "← My Tasks" }
+                if let Some(t) = &current_task {
+                    span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
+                        "•"
+                    }
+                    Link {
+                        to: Route::ProjectTasksPage {
+                            project_id: t.project_id,
+                        },
+                        class: "btn-back-link",
+                        "📁 {t.project_name}"
+                    }
                 }
             }
 
@@ -121,7 +133,9 @@ pub fn TaskPage(id: i64) -> Element {
                 div { class: "task-detail-card",
                     div { class: "task-detail-header",
                         if *is_editing.read() {
-                            div { class: "task-detail-title-group", style: "width: 100%;",
+                            div {
+                                class: "task-detail-title-group",
+                                style: "width: 100%;",
                                 label { class: "form-label", "Title" }
                                 input {
                                     class: "task-edit-title-input",
@@ -133,7 +147,15 @@ pub fn TaskPage(id: i64) -> Element {
                             div { class: "task-detail-title-group",
                                 h1 { class: "task-detail-title", "{task.title}" }
                                 span { class: "task-detail-meta",
-                                    "Task #{task.id} • Created by "
+                                    "Task #{task.id} • Project: "
+                                    Link {
+                                        to: Route::ProjectTasksPage {
+                                            project_id: task.project_id,
+                                        },
+                                        style: "color: var(--primary-light); text-decoration: none; font-weight: var(--font-weight-bold);",
+                                        "📁 {task.project_name}"
+                                    }
+                                    " • Created by "
                                     strong { "{task.author_name}" }
                                 }
                             }
@@ -146,7 +168,11 @@ pub fn TaskPage(id: i64) -> Element {
                                     class: "btn-task-save",
                                     disabled: *is_saving.read(),
                                     onclick: save_task_changes,
-                                    if *is_saving.read() { "Saving..." } else { "Save" }
+                                    if *is_saving.read() {
+                                        "Saving..."
+                                    } else {
+                                        "Save"
+                                    }
                                 }
                                 button {
                                     r#type: "button",
@@ -156,7 +182,9 @@ pub fn TaskPage(id: i64) -> Element {
                                     "Cancel"
                                 }
                             } else {
-                                span { class: "task-detail-status status-{task.status.as_str()}", "{task.status}" }
+                                span { class: "task-detail-status status-{task.status.as_str()}",
+                                    "{task.status}"
+                                }
                                 button {
                                     r#type: "button",
                                     class: "btn-task-edit",
@@ -171,7 +199,9 @@ pub fn TaskPage(id: i64) -> Element {
                     }
 
                     if let Some(err) = &*save_error.read() {
-                        div { class: "task-detail-error", style: "margin-bottom: 12px;",
+                        div {
+                            class: "task-detail-error",
+                            style: "margin-bottom: 12px;",
                             strong { "Error saving changes: " }
                             span { "{err}" }
                         }
@@ -233,7 +263,9 @@ pub fn TaskPage(id: i64) -> Element {
                             } else {
                                 ul { class: "detail-assignees-list",
                                     for user in &task.assignees {
-                                        li { key: "{user.id}", class: "detail-assignee-item",
+                                        li {
+                                            key: "{user.id}",
+                                            class: "detail-assignee-item",
                                             span { class: "detail-assignee-name", "{user.name}" }
                                             span { class: "detail-assignee-email", "({user.email})" }
                                         }
@@ -250,12 +282,18 @@ pub fn TaskPage(id: i64) -> Element {
 
                     div { class: "task-discussion-messages",
                         if messages.is_empty() {
-                            p { class: "empty-description", "No messages in this discussion yet. Start the conversation below!" }
+                            p { class: "empty-description",
+                                "No messages in this discussion yet. Start the conversation below!"
+                            }
                         } else {
                             for msg in messages {
-                                div { key: "{msg.msg_id}", class: "task-discussion-message-item",
+                                div {
+                                    key: "{msg.msg_id}",
+                                    class: "task-discussion-message-item",
                                     div { class: "task-message-header",
-                                        span { class: "task-message-author", "#{msg.msg_id} • {msg.author_name}" }
+                                        span { class: "task-message-author",
+                                            "#{msg.msg_id} • {msg.author_name}"
+                                        }
                                         span { class: "task-message-time", "just now" }
                                     }
                                     p { class: "task-message-body", "{msg.msg}" }
@@ -266,7 +304,9 @@ pub fn TaskPage(id: i64) -> Element {
 
                     div { class: "task-message-composer",
                         if let Some(err) = &*message_error.read() {
-                            div { class: "task-detail-error", style: "padding: 8px 12px;",
+                            div {
+                                class: "task-detail-error",
+                                style: "padding: 8px 12px;",
                                 "{err}"
                             }
                         }
@@ -282,7 +322,11 @@ pub fn TaskPage(id: i64) -> Element {
                             class: "btn-post-message",
                             disabled: *is_posting_message.read(),
                             onclick: handle_post_message,
-                            if *is_posting_message.read() { "Posting..." } else { "Post Message" }
+                            if *is_posting_message.read() {
+                                "Posting..."
+                            } else {
+                                "Post Message"
+                            }
                         }
                     }
                 }
