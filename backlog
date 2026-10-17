@@ -1,10 +1,28 @@
-- Assigned should probably not be it's own status
-- [x] Make which columns are shown in the task-view flexible, i.e should be choosable by the user
 
 
+# Database/backend: Managing users joining and leaving a project via organizaiton roles.
 There is a potential problem in the database with the role-based access of users that
-have access to a project via an organization. It is expensive to perform joins every
-time a project is accesses so one would like to assign users with a certain 
-given role in an organization into the project on a timer. Ideally, the orgnization
-admins make the rules themselves for what users are added to what projects,
-and these projects should be external as well. 
+have access to a project via an organization. 
+    - It is expensive to perform joins every time a project is accesses so one would 
+      like to assign users with a certain  given role in an organization into the project.
+    
+    - When an organization leaves a project, users who joined through this mechanism should
+      also have to leave. If a user who joined through this mechanism is the project leader,
+      leadership handover must be done first.
+
+    - admins make the rules themselves for what users are added to what projects,
+      and these projects should be external as well. 
+    
+
+    Solutions:
+    - Are there any cascading mechanisms in SQL for this that works across sql engines,
+      like both SQLite and Postgres?
+    
+    - We could have a nullable field <user-joined-from-org> in the project database,
+      that indicates that the user joined through this mechanism, and should be removed
+      when that organization leaves the project. 
+    
+    - If the users role in that organization is changed, the user should also leave
+      the projects no longer in alignment with the users role.
+    
+    - If the user leaves the organization, it should also leave thoes projects

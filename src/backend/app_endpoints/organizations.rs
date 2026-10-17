@@ -355,3 +355,229 @@ pub async fn respond_to_organization_governance_transfer_request(
     Ok(())
 }
 
+#[server]
+pub async fn assign_organization_member_role(
+    organization_id: i64,
+    member_user_id: i64,
+    role: String,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let is_admin: bool = sqlx::query_scalar(
+        "SELECT (o.governing_user_id = $1 OR EXISTS (
+            SELECT 1 FROM organization_member_roles omr
+            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+         ))
+         FROM organization o WHERE o.id = $2",
+    )
+    .bind(user.id)
+    .bind(organization_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !is_admin {
+        return Err(ServerFnError::new("Only organization admins can assign roles."));
+    }
+
+    let role_clean = role.trim();
+    if role_clean.is_empty() {
+        return Err(ServerFnError::new("Role cannot be empty."));
+    }
+
+    sqlx::query(
+        "INSERT INTO organization_member_roles (organization_id, user_id, role, assigned_at)
+         VALUES ($1, $2, $3, unixepoch())
+         ON CONFLICT(organization_id, user_id, role) DO NOTHING",
+    )
+    .bind(organization_id)
+    .bind(member_user_id)
+    .bind(role_clean)
+    .execute(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to assign role: {e}")))?;
+
+    Ok(())
+}
+
+#[server]
+pub async fn revoke_organization_member_role(
+    organization_id: i64,
+    member_user_id: i64,
+    role: String,
+    confirm_active_tasks_warning: bool,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let is_admin: bool = sqlx::query_scalar(
+        "SELECT (o.governing_user_id = $1 OR EXISTS (
+            SELECT 1 FROM organization_member_roles omr
+            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+         ))
+         FROM organization o WHERE o.id = $2",
+    )
+    .bind(user.id)
+    .bind(organization_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !is_admin {
+        return Err(ServerFnError::new("Only organization admins can revoke roles."));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct ImpactRow {
+        task_id: i64,
+        task_title: String,
+        status: String,
+        project_name: String,
+    }
+
+    let impacts: Vec<ImpactRow> = sqlx::query_as(
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, p.name AS project_name
+         FROM project_member_grants pmg
+         JOIN project p ON p.id = pmg.project_id
+         JOIN assignments a ON a.assigned_to = $1
+         JOIN task t ON t.id = a.task_id AND t.project_id = p.id
+         WHERE pmg.source_org_id = $2
+           AND pmg.source_org_role = $3
+           AND pmg.user_id = $1
+           AND t.status != 'finished'
+           AND NOT EXISTS (
+               SELECT 1 FROM project_member_grants other
+               JOIN project_role_definition prd ON prd.role = other.project_role
+               WHERE other.project_id = p.id
+                 AND other.user_id = $1
+                 AND NOT (other.source_org_id = $2 AND other.source_org_role = $3)
+                 AND (prd.permissions_mask & 4) != 0
+           )",
+    )
+    .bind(member_user_id)
+    .bind(organization_id)
+    .bind(&role)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Impact check failed: {e}")))?;
+
+    if !impacts.is_empty() && !confirm_active_tasks_warning {
+        let details: Vec<String> = impacts
+            .iter()
+            .map(|r| format!("Project '{}' task '{}' [{}]", r.project_name, r.task_title, r.status))
+            .collect();
+        return Err(ServerFnError::new(format!(
+            "Active task impact warning: Revoking role '{}' will revoke task privileges on active tasks: {}. Confirm with confirm_active_tasks_warning=true or hand over tasks first.",
+            role, details.join("; ")
+        )));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
+
+    for imp in &impacts {
+        if imp.status != "in_progress" {
+            sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
+                .bind(imp.task_id)
+                .bind(member_user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to unassign task: {e}")))?;
+        }
+    }
+
+    sqlx::query("DELETE FROM organization_member_roles WHERE organization_id = $1 AND user_id = $2 AND role = $3")
+        .bind(organization_id)
+        .bind(member_user_id)
+        .bind(&role)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to revoke organization role: {e}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Commit failed: {e}")))?;
+
+    Ok(())
+}
+
+#[server]
+pub async fn get_organization_member_roles(
+    organization_id: i64,
+    member_user_id: i64,
+) -> Result<Vec<String>, ServerFnError> {
+    let pool = get_db().await;
+    let roles: Vec<String> = sqlx::query_scalar(
+        "SELECT role FROM organization_member_roles WHERE organization_id = $1 AND user_id = $2 ORDER BY role ASC",
+    )
+    .bind(organization_id)
+    .bind(member_user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch member roles: {e}")))?;
+
+    Ok(roles)
+}
+
+#[server]
+pub async fn create_organization_role(
+    organization_id: i64,
+    role: String,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let is_admin: bool = sqlx::query_scalar(
+        "SELECT (o.governing_user_id = $1 OR EXISTS (
+            SELECT 1 FROM organization_member_roles omr
+            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
+         ))
+         FROM organization o WHERE o.id = $2",
+    )
+    .bind(user.id)
+    .bind(organization_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !is_admin {
+        return Err(ServerFnError::new("Only organization admins can create custom roles."));
+    }
+
+    let role_clean = role.trim().to_lowercase();
+    if role_clean.is_empty() {
+        return Err(ServerFnError::new("Role name cannot be empty."));
+    }
+
+    sqlx::query("INSERT INTO organization_role (organization_id, role) VALUES ($1, $2)")
+        .bind(organization_id)
+        .bind(role_clean)
+        .execute(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to create role: {e}")))?;
+
+    Ok(())
+}
+
+#[server]
+pub async fn get_organization_roles(
+    organization_id: i64,
+) -> Result<Vec<String>, ServerFnError> {
+    let pool = get_db().await;
+    let roles: Vec<String> = sqlx::query_scalar(
+        "SELECT role FROM organization_role WHERE organization_id = $1 ORDER BY role ASC",
+    )
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch organization roles: {e}")))?;
+
+    Ok(roles)
+}
+

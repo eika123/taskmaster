@@ -24,6 +24,12 @@ async fn test_project_leadership_and_task_messages() {
         .await
         .unwrap();
 
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1, 1, 'member')")
+        .bind(proj_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
     // 2. Add task
     let task_id: i64 = sqlx::query_scalar(
         "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, 'accepted') RETURNING id",

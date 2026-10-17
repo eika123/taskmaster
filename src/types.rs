@@ -129,15 +129,51 @@ pub struct ProjectMember {
     pub user_email: String,
     pub role: String,
     pub granted_by_org_role: bool,
+    pub permissions_mask: i64,
+    pub active_grant_key: Option<String>,
     pub joined_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
-pub struct ProjectOrgRoleAccess {
+pub struct ProjectOrganization {
     pub project_id: i64,
     pub organization_id: i64,
-    pub role: String,
+    pub organization_name: String,
+    pub relationship_type: String,
+    pub max_granted_role: String,
+    pub joined_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct ProjectMemberGrant {
+    pub project_id: i64,
+    pub user_id: i64,
+    pub grant_key: String,
+    pub project_role: String,
+    pub source_org_id: Option<i64>,
+    pub source_org_name: Option<String>,
+    pub source_org_role: Option<String>,
+    pub granted_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct ProjectOrgRoleRule {
+    pub project_id: i64,
+    pub organization_id: i64,
+    pub org_role: String,
+    pub project_role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActiveTaskImpact {
+    pub project_id: i64,
+    pub project_name: String,
+    pub task_id: i64,
+    pub task_title: String,
+    pub task_status: TaskStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
