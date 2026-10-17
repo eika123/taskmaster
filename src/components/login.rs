@@ -1,5 +1,6 @@
 use crate::auth::AuthState;
 use crate::backend::app_endpoints::login;
+use crate::types::is_valid_email;
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -11,8 +12,17 @@ pub fn LoginPage() -> Element {
     let mut password = use_signal(String::new);
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut is_submitting = use_signal(|| false);
+    let mut email_touched = use_signal(|| false);
 
     let navigator = use_navigator();
+
+    let email_is_invalid = use_memo(move || {
+        if !email_touched() {
+            return false;
+        }
+        let val = email().trim().to_string();
+        !val.is_empty() && !is_valid_email(&val)
+    });
 
     let on_submit = move |evt: FormEvent| {
         evt.prevent_default();
@@ -20,11 +30,18 @@ pub fn LoginPage() -> Element {
             return;
         }
 
+        email_touched.set(true);
+
         let email_val = email().trim().to_string();
         let pass_val = password();
 
         if email_val.is_empty() || pass_val.is_empty() {
             error_msg.set(Some("Please fill in all fields.".to_string()));
+            return;
+        }
+
+        if !is_valid_email(&email_val) {
+            error_msg.set(Some("Please enter a valid email address.".to_string()));
             return;
         }
 
@@ -72,11 +89,18 @@ pub fn LoginPage() -> Element {
                         input {
                             id: "login-email",
                             r#type: "email",
+                            class: if email_is_invalid() { "input-invalid" },
                             placeholder: "you@example.com",
                             required: true,
                             value: "{email}",
                             oninput: move |e| email.set(e.value()),
+                            onblur: move |_| email_touched.set(true),
                             disabled: is_submitting(),
+                        }
+                        span {
+                            class: "field-hint-error",
+                            style: if !email_is_invalid() { "visibility: hidden;" },
+                            "Please enter a valid email address."
                         }
                     }
 

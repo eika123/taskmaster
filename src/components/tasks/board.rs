@@ -7,6 +7,7 @@ use crate::backend::app_endpoints::{
 use crate::types::TaskStatus;
 use super::column::TaskColumn;
 use super::modals::{InlineCreateTaskModal, InlineInviteModal};
+use crate::components::dashboard::ConfirmDeleteModal;
 
 #[component]
 pub fn TaskView(project_id: Option<i64>) -> Element {
@@ -67,6 +68,8 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
 
     let mut show_new_task = use_signal(|| false);
     let mut show_invite_modal = use_signal(|| false);
+    let mut show_delete_modal = use_signal(|| false);
+    let mut is_deleting_project = use_signal(|| false);
     let mut delete_proj_err = use_signal(|| Option::<String>::None);
     let auth = use_context::<crate::components::AuthState>();
     let current_user_id = auth.user.read().as_ref().map(|u| u.id);
@@ -166,19 +169,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                             class: "btn-task-cancel",
                             style: "color: var(--danger); border-color: var(--danger-bg);",
                             onclick: move |_| {
-                                if let Some(target_pid) = pid {
-                                    let nav = nav.clone();
-                                    spawn(async move {
-                                        match crate::backend::app_endpoints::delete_project(target_pid).await {
-                                            Ok(_) => {
-                                                nav.push(crate::Route::DashboardPage {});
-                                            }
-                                            Err(e) => {
-                                                delete_proj_err.set(Some(e.to_string()));
-                                            }
-                                        }
-                                    });
-                                }
+                                show_delete_modal.set(true);
                             },
                             "🗑 Delete Project"
                         }
@@ -196,9 +187,41 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                 }
             }
 
-            if let Some(err) = &*delete_proj_err.read() {
-                div { class: "task-detail-error", style: "padding: 8px 12px; margin-bottom: 16px;",
-                    "{err}"
+            if *show_delete_modal.read() {
+                if let (Some(target_pid), Some(pinfo)) = (pid, &project_info) {
+                    {
+                        let pname = pinfo.name.clone();
+                        rsx! {
+                            ConfirmDeleteModal {
+                                entity_type: "project".to_string(),
+                                entity_name: pname,
+                                on_close: move |_| {
+                                    show_delete_modal.set(false);
+                                    delete_proj_err.set(None);
+                                },
+                                on_confirm: move |confirmation: String| {
+                                    is_deleting_project.set(true);
+                                    delete_proj_err.set(None);
+                                    let nav = nav.clone();
+                                    spawn(async move {
+                                        match crate::backend::app_endpoints::delete_project(target_pid, confirmation).await {
+                                            Ok(_) => {
+                                                is_deleting_project.set(false);
+                                                show_delete_modal.set(false);
+                                                nav.push(crate::Route::DashboardPage {});
+                                            }
+                                            Err(e) => {
+                                                is_deleting_project.set(false);
+                                                delete_proj_err.set(Some(e.to_string()));
+                                            }
+                                        }
+                                    });
+                                },
+                                is_deleting: *is_deleting_project.read(),
+                                error: (*delete_proj_err.read()).clone(),
+                            }
+                        }
+                    }
                 }
             }
 

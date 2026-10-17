@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::backend::app_endpoints::{create_organization, create_project, invite_user_to_project};
+use crate::backend::app_endpoints::{create_organization, create_project, delete_organization, invite_user_to_project};
 use crate::types::{Organization, User};
 
 #[component]
@@ -309,4 +309,188 @@ pub fn InviteMemberModal(
         }
     }
 }
+
+#[component]
+pub fn ManageOrgModal(
+    organization: Organization,
+    on_close: EventHandler<()>,
+    on_deleted: EventHandler<()>,
+) -> Element {
+    let mut show_confirm_delete = use_signal(|| false);
+    let mut delete_error = use_signal(|| Option::<String>::None);
+    let mut is_deleting = use_signal(|| false);
+
+    let org_id = organization.id;
+    let org_name = organization.name.clone();
+
+    rsx! {
+        if *show_confirm_delete.read() {
+            ConfirmDeleteModal {
+                entity_type: "organization".to_string(),
+                entity_name: org_name.clone(),
+                on_close: move |_| show_confirm_delete.set(false),
+                on_confirm: move |confirmation: String| {
+                    is_deleting.set(true);
+                    delete_error.set(None);
+                    spawn(async move {
+                        match delete_organization(org_id, confirmation).await {
+                            Ok(_) => {
+                                is_deleting.set(false);
+                                show_confirm_delete.set(false);
+                                on_deleted.call(());
+                            }
+                            Err(err) => {
+                                is_deleting.set(false);
+                                delete_error.set(Some(err.to_string()));
+                            }
+                        }
+                    });
+                },
+                is_deleting: *is_deleting.read(),
+                error: (*delete_error.read()).clone(),
+            }
+        }
+
+        div { class: "overlay-backdrop",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "overlay-modal",
+                style: "max-width: 540px;",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "overlay-header",
+                    div { class: "overlay-title-group",
+                        h2 { class: "overlay-title", "Manage {organization.name}" }
+                        p { class: "overlay-subtitle", "@{organization.slug}" }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn-close-overlay",
+                        onclick: move |_| on_close.call(()),
+                        "✕"
+                    }
+                }
+                div { style: "padding: 20px 24px; display: flex; flex-direction: column; gap: 20px;",
+                    div { class: "form-group",
+                        label { class: "form-label", "Organization Details" }
+                        div { style: "background: var(--bg-surface-raised); padding: 12px 14px; border-radius: var(--radius-sm); font-size: var(--font-size-body-sm);",
+                            p { style: "margin: 0 0 6px 0;", "Governor: " strong { "{organization.governing_user_name}" } }
+                            p { style: "margin: 0;", "Slug: " strong { "@{organization.slug}" } }
+                        }
+                    }
+
+                    div { style: "border: 1px solid var(--danger-bg); border-radius: var(--radius-md); padding: 16px; background-color: var(--bg-surface);",
+                        h3 { style: "margin: 0 0 8px 0; font-size: var(--font-size-cardheader-small); color: var(--danger);",
+                            "Danger Zone"
+                        }
+                        p { style: "margin: 0 0 12px 0; font-size: var(--font-size-caption); color: var(--text-secondary);",
+                            "Deleting an organization removes all roles, memberships, and records. It requires that all other members have left or been removed first."
+                        }
+                        button {
+                            r#type: "button",
+                            class: "btn-action-sm",
+                            style: "color: var(--danger); border-color: var(--danger); font-weight: var(--font-weight-bold);",
+                            onclick: move |_| show_confirm_delete.set(true),
+                            "Delete this organization"
+                        }
+                    }
+
+                    div { class: "overlay-footer",
+                        button {
+                            r#type: "button",
+                            class: "btn-cancel",
+                            onclick: move |_| on_close.call(()),
+                            "Close"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn ConfirmDeleteModal(
+    entity_type: String,
+    entity_name: String,
+    on_close: EventHandler<()>,
+    on_confirm: EventHandler<String>,
+    is_deleting: bool,
+    error: Option<String>,
+) -> Element {
+    let mut input_text = use_signal(String::new);
+    let expected = format!("DELETE {}", entity_name.trim());
+    let expected_check = expected.clone();
+    let is_matched = use_memo(move || input_text().trim() == expected_check);
+
+    rsx! {
+        div { class: "overlay-backdrop", style: "z-index: 1100;",
+            onclick: move |_| on_close.call(()),
+            div {
+                class: "overlay-modal",
+                style: "max-width: 500px; border-top: 4px solid var(--danger);",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "overlay-header",
+                    div { class: "overlay-title-group",
+                        h2 { class: "overlay-title", style: "color: var(--danger);", "Delete {entity_type}?" }
+                        p { class: "overlay-subtitle", "This action cannot be undone." }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn-close-overlay",
+                        onclick: move |_| on_close.call(()),
+                        disabled: is_deleting,
+                        "✕"
+                    }
+                }
+                div { style: "padding: 20px 24px; display: flex; flex-direction: column; gap: 14px;",
+                    if let Some(err) = &error {
+                        div { class: "task-detail-error", style: "padding: 10px;",
+                            "{err}"
+                        }
+                    }
+                    div { style: "background-color: var(--danger-bg); border-left: 3px solid var(--danger); padding: 12px 14px; border-radius: var(--radius-sm); font-size: var(--font-size-body-sm);",
+                        p { style: "margin: 0; color: var(--text-primary);",
+                            "Unexpected bad things will happen if you don’t read this! This will permanently delete the "
+                            strong { "{entity_name}" }
+                            " {entity_type} and all associated data."
+                        }
+                    }
+                    p { style: "font-size: var(--font-size-body-sm); margin: 0;",
+                        "Please type "
+                        strong { style: "font-family: monospace; background: var(--bg-surface-raised); padding: 2px 6px; border-radius: 4px; color: var(--danger);",
+                            "{expected}"
+                        }
+                        " to confirm:"
+                    }
+                    input {
+                        class: "form-input",
+                        style: "width: 100%; font-family: monospace;",
+                        placeholder: "{expected}",
+                        value: "{input_text}",
+                        oninput: move |e| input_text.set(e.value()),
+                        disabled: is_deleting,
+                    }
+                    div { class: "overlay-footer",
+                        button {
+                            r#type: "button",
+                            class: "btn-cancel",
+                            onclick: move |_| on_close.call(()),
+                            disabled: is_deleting,
+                            "Cancel"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "btn-action-sm",
+                            style: "background-color: var(--danger); color: white; border: none; padding: 9px 18px; font-weight: var(--font-weight-bold);",
+                            disabled: is_deleting || !is_matched(),
+                            onclick: move |_| on_confirm.call(input_text().trim().to_string()),
+                            if is_deleting { "Deleting..." } else { "Delete this {entity_type}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 

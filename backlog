@@ -1,2 +1,10 @@
 - Assigned should probably not be it's own status
 - [x] Make which columns are shown in the task-view flexible, i.e should be choosable by the user
+
+
+There is a potential problem in the database with the role-based access of users that
+have access to a project via an organization. It is expensive to perform joins every
+time a project is accesses so one would like to assign users with a certain 
+given role in an organization into the project on a timer. Ideally, the orgnization
+admins make the rules themselves for what users are added to what projects,
+and these projects should be external as well. 

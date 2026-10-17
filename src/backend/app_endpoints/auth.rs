@@ -2,6 +2,9 @@ use dioxus::prelude::*;
 use crate::types::{AuthResponse, User};
 
 #[cfg(feature = "server")]
+use crate::types::is_valid_email;
+
+#[cfg(feature = "server")]
 use crate::backend::crypto::{hash_password, verify_password, RawUserWithPassword};
 #[cfg(feature = "server")]
 use crate::backend::database::get_db;
@@ -22,6 +25,10 @@ pub async fn get_auth_user() -> Result<User, ServerFnError> {
 #[server]
 pub async fn login(email: String, password: String) -> Result<AuthResponse, ServerFnError> {
     let email_clean = email.trim().to_lowercase();
+    if !is_valid_email(&email_clean) {
+        return Err(ServerFnError::new("Valid email is required."));
+    }
+
     let limiter = get_rate_limiter().await;
 
     if let Err(remaining) = limiter.check_limit(&email_clean).await {
@@ -94,7 +101,7 @@ pub async fn register(
     if name_clean.is_empty() {
         return Err(ServerFnError::new("Name cannot be empty."));
     }
-    if email_clean.is_empty() || !email_clean.contains('@') {
+    if !is_valid_email(&email_clean) {
         return Err(ServerFnError::new("Valid email is required."));
     }
     if password.len() < 6 {

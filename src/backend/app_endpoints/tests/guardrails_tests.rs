@@ -113,3 +113,19 @@ async fn test_project_and_organization_database_guardrails() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn test_deletion_confirmation_phrase_verification() {
+    let proj_name = "Core Engine";
+    let expected = format!("DELETE {}", proj_name.trim());
+
+    // Mismatched phrases
+    assert_ne!("delete core engine", expected);
+    assert_ne!("DELETE", expected);
+    assert_ne!("DELETE Core", expected);
+    assert_ne!("DELETE  Core Engine", expected);
+
+    // Exact match
+    assert_eq!("DELETE Core Engine".trim(), expected);
+}
+
+

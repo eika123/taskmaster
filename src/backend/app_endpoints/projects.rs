@@ -94,20 +94,28 @@ pub async fn create_project(
 }
 
 #[server]
-pub async fn delete_project(project_id: i64) -> Result<(), ServerFnError> {
+pub async fn delete_project(project_id: i64, confirmation: String) -> Result<(), ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let leader_id: i64 = sqlx::query_scalar("SELECT leader_id FROM project WHERE id = $1")
-        .bind(project_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
+    let (leader_id, name): (i64, String) =
+        sqlx::query_as("SELECT leader_id, name FROM project WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
 
     if leader_id != user.id {
         return Err(ServerFnError::new(
             "Only the project leader can delete the project.",
         ));
+    }
+
+    let expected = format!("DELETE {}", name.trim());
+    if confirmation.trim() != expected {
+        return Err(ServerFnError::new(format!(
+            "Confirmation mismatch. Please type exactly '{expected}' to delete this project."
+        )));
     }
 
     // SQLite's ON DELETE CASCADE automatically cascades deletion to tasks,

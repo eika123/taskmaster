@@ -1471,6 +1471,18 @@ body {
     background-color: var(--bg-surface-raised);
 }
 
+.auth-form .form-group input.input-invalid {
+    border-color: var(--danger);
+}
+
+.auth-form .field-hint-error {
+    font-size: var(--font-size-caption);
+    color: var(--danger);
+    min-height: 16px;
+    line-height: 1.2;
+    margin-top: 4px;
+}
+
 .btn-auth-submit {
     background-color: var(--primary);
     color: var(--text-inverse);

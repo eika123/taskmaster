@@ -89,12 +89,12 @@ pub async fn create_organization(
 }
 
 #[server]
-pub async fn delete_organization(organization_id: i64) -> Result<(), ServerFnError> {
+pub async fn delete_organization(organization_id: i64, confirmation: String) -> Result<(), ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let governing_id: i64 =
-        sqlx::query_scalar("SELECT governing_user_id FROM organization WHERE id = $1")
+    let (governing_id, name): (i64, String) =
+        sqlx::query_as("SELECT governing_user_id, name FROM organization WHERE id = $1")
             .bind(organization_id)
             .fetch_one(pool)
             .await
@@ -104,6 +104,13 @@ pub async fn delete_organization(organization_id: i64) -> Result<(), ServerFnErr
         return Err(ServerFnError::new(
             "Only the governing user can delete the organization.",
         ));
+    }
+
+    let expected = format!("DELETE {}", name.trim());
+    if confirmation.trim() != expected {
+        return Err(ServerFnError::new(format!(
+            "Confirmation mismatch. Please type exactly '{expected}' to delete this organization."
+        )));
     }
 
     sqlx::query("DELETE FROM organization WHERE id = $1")

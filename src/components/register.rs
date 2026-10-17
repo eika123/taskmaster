@@ -1,5 +1,6 @@
 use crate::auth::AuthState;
 use crate::backend::app_endpoints::register;
+use crate::types::is_valid_email;
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -13,14 +14,36 @@ pub fn RegisterPage() -> Element {
     let mut confirm_password = use_signal(String::new);
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut is_submitting = use_signal(|| false);
+    let mut email_touched = use_signal(|| false);
+    let mut confirm_touched = use_signal(|| false);
 
     let navigator = use_navigator();
+
+    let email_is_invalid = use_memo(move || {
+        if !email_touched() {
+            return false;
+        }
+        let val = email().trim().to_string();
+        !val.is_empty() && !is_valid_email(&val)
+    });
+
+    let passwords_mismatch = use_memo(move || {
+        if !confirm_touched() {
+            return false;
+        }
+        let p = password();
+        let cp = confirm_password();
+        !cp.is_empty() && p != cp
+    });
 
     let on_submit = move |evt: FormEvent| {
         evt.prevent_default();
         if is_submitting() {
             return;
         }
+
+        email_touched.set(true);
+        confirm_touched.set(true);
 
         let name_val = name().trim().to_string();
         let email_val = email().trim().to_string();
@@ -29,6 +52,11 @@ pub fn RegisterPage() -> Element {
 
         if name_val.is_empty() || email_val.is_empty() || pass_val.is_empty() {
             error_msg.set(Some("Please fill in all fields.".to_string()));
+            return;
+        }
+
+        if !is_valid_email(&email_val) {
+            error_msg.set(Some("Please enter a valid email address.".to_string()));
             return;
         }
 
@@ -99,11 +127,18 @@ pub fn RegisterPage() -> Element {
                         input {
                             id: "register-email",
                             r#type: "email",
+                            class: if email_is_invalid() { "input-invalid" },
                             placeholder: "jane@example.com",
                             required: true,
                             value: "{email}",
                             oninput: move |e| email.set(e.value()),
+                            onblur: move |_| email_touched.set(true),
                             disabled: is_submitting(),
+                        }
+                        span {
+                            class: "field-hint-error",
+                            style: if !email_is_invalid() { "visibility: hidden;" },
+                            "Please enter a valid email address."
                         }
                     }
 
@@ -125,11 +160,18 @@ pub fn RegisterPage() -> Element {
                         input {
                             id: "register-confirm-password",
                             r#type: "password",
+                            class: if passwords_mismatch() { "input-invalid" },
                             placeholder: "••••••••",
                             required: true,
                             value: "{confirm_password}",
                             oninput: move |e| confirm_password.set(e.value()),
+                            onblur: move |_| confirm_touched.set(true),
                             disabled: is_submitting(),
+                        }
+                        span {
+                            class: "field-hint-error",
+                            style: if !passwords_mismatch() { "visibility: hidden;" },
+                            "Passwords do not match."
                         }
                     }
 

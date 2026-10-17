@@ -6,22 +6,11 @@ use crate::Route;
 pub fn DashboardProjects(
     projects: Vec<Project>,
     on_invite: EventHandler<(i64, String)>,
-    on_deleted: Option<EventHandler<()>>,
 ) -> Element {
-    let auth = use_context::<crate::components::AuthState>();
-    let current_user_id = auth.user.read().as_ref().map(|u| u.id);
-    let mut delete_error = use_signal(|| Option::<String>::None);
-
     rsx! {
         div { class: "dashboard-panel",
             h2 { class: "dashboard-panel-title",
                 span { "My Projects ({projects.len()})" }
-            }
-
-            if let Some(err) = &*delete_error.read() {
-                div { class: "task-detail-error", style: "padding: 8px 12px; margin-bottom: 8px;",
-                    "{err}"
-                }
             }
 
             if projects.is_empty() {
@@ -31,7 +20,6 @@ pub fn DashboardProjects(
                     for proj in projects {
                         {
                             let pid = proj.id;
-                            let is_leader = current_user_id == Some(proj.leader_id);
                             let pname = proj.name.clone();
                             let pname_invite = proj.name.clone();
                             rsx! {
@@ -65,29 +53,6 @@ pub fn DashboardProjects(
                                                     on_invite.call((pid, pname_invite.clone()));
                                                 },
                                                 "+ Invite"
-                                            }
-                                            if is_leader {
-                                                button {
-                                                    r#type: "button",
-                                                    class: "btn-action-sm",
-                                                    style: "color: var(--danger); border-color: var(--danger-bg);",
-                                                    onclick: move |_| {
-                                                        if let Some(on_del) = on_deleted {
-                                                            spawn(async move {
-                                                                match crate::backend::app_endpoints::delete_project(pid).await {
-                                                                    Ok(_) => {
-                                                                        delete_error.set(None);
-                                                                        on_del.call(());
-                                                                    }
-                                                                    Err(e) => {
-                                                                        delete_error.set(Some(e.to_string()));
-                                                                    }
-                                                                }
-                                                            });
-                                                        }
-                                                    },
-                                                    "Delete"
-                                                }
                                             }
                                             Link {
                                                 to: Route::ProjectTasksPage { project_id: pid },

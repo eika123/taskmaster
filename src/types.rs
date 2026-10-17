@@ -208,3 +208,24 @@ pub struct AuthResponse {
 pub use crate::backend::database::get_db;
 #[cfg(feature = "server")]
 pub use crate::backend::middleware::auth::*;
+
+use validator::ValidateEmail;
+
+/// Validates that an email is RFC/HTML5 compliant and has a valid domain with a TLD (e.g. `user@example.com`).
+/// Rejects incomplete domains like `user@example` or `user@example.` to prevent UI flashing while typing.
+pub fn is_valid_email(email: &str) -> bool {
+    let clean = email.trim();
+    if !clean.validate_email() {
+        return false;
+    }
+    if let Some(domain) = clean.rsplit('@').next() {
+        if let Some(tld) = domain.rsplit('.').next() {
+            return domain.contains('.')
+                && tld.len() >= 2
+                && !domain.starts_with('.')
+                && !domain.ends_with('.');
+        }
+    }
+    false
+}
+
