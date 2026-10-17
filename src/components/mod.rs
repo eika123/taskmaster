@@ -6,9 +6,16 @@ pub mod new_task;
 pub mod status_select;
 pub mod task_detail;
 pub mod tasks;
+pub mod register;
+pub mod login;
+pub mod navbar;
+
 
 pub use auth::*;
 pub use landing::*;
 pub use new_task::*;
 pub use task_detail::*;
 pub use tasks::*;
+pub use register::*;
+pub use login::*;
+pub use navbar::*;

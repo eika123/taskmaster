@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+
 pub mod types;
 pub mod backend;
 pub mod components;
@@ -7,6 +8,8 @@ pub use crate::types::*;
 
 
 pub use crate::backend::app_endpoints::*;
+
+use crate::components::navbar::Navbar;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -19,7 +22,7 @@ pub enum Route {
         #[route("/register")]
         RegisterPage {},
 
-        #[layout(AuthGuard)]
+        #[layout(AuthLayout)]
             #[route("/tasks")]
             TasksDashboardPage {},
             #[route("/task/new")]
@@ -55,51 +58,6 @@ fn main() {
     dioxus::launch(App);
 }
 
-/// Layout component protecting authenticated routes.
-#[component]
-fn AuthGuard() -> Element {
-    let auth = use_context::<AuthState>();
-    let user = (auth.user)();
-    let is_loading = (auth.is_loading)();
-
-    if is_loading {
-        return rsx! {
-            div { class: "auth-guard-loading",
-                p { "Verifying authentication..." }
-            }
-        };
-    }
-
-    if user.is_some() {
-        rsx! {
-            Outlet::<Route> {}
-        }
-    } else {
-        rsx! {
-            div { class: "unauthorized-container",
-                div { class: "unauthorized-card",
-                    span { class: "unauthorized-icon", "🔒" }
-                    h2 { class: "unauthorized-title", "Authentication Required" }
-                    p { class: "unauthorized-desc",
-                        "You must be logged in to view and manage tasks on the task board."
-                    }
-                    div { class: "unauthorized-actions",
-                        Link {
-                            to: Route::LoginPage {},
-                            class: "btn-unauthorized-login",
-                            "Log In"
-                        }
-                        Link {
-                            to: Route::LandingPage {},
-                            class: "btn-unauthorized-home",
-                            "Back to Home"
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 
 #[component]
@@ -150,61 +108,5 @@ fn App() -> Element {
 fn TasksDashboardPage() -> Element {
     rsx! {
         TaskView {}
-    }
-}
-
-/// Shared navigation header.
-#[component]
-fn Navbar() -> Element {
-    let mut auth = use_context::<AuthState>();
-    let current_user = (auth.user)();
-
-    rsx! {
-        header { class: "app-header",
-            div { class: "app-navbar",
-                div { class: "navbar-brand",
-                    Link { to: Route::LandingPage {}, class: "brand-link",
-                        span { class: "brand-logo", "⚡" }
-                        span { class: "brand-name", "FlowTask" }
-                    }
-                }
-                nav { class: "navbar-links",
-                    Link { to: Route::LandingPage {}, class: "nav-link", "Home" }
-                    Link { to: Route::TasksDashboardPage {}, class: "nav-link", "Task Board" }
-                }
-
-                div { class: "navbar-actions",
-                    if let Some(user) = current_user {
-                        div { class: "user-profile-badge",
-                            span { class: "user-avatar-circle",
-                                "{user.name.chars().next().unwrap_or('U')}"
-                            }
-                            span { class: "user-name-text", "{user.name}" }
-                            button {
-                                r#type: "button",
-                                class: "btn-navbar-logout",
-                                onclick: move |_| auth.logout_user(),
-                                "Log Out"
-                            }
-                        }
-                    } else {
-                        div { class: "auth-nav-buttons",
-                            Link {
-                                to: Route::LoginPage {},
-                                class: "btn-navbar-login",
-                                "Log In"
-                            }
-                            Link {
-                                to: Route::RegisterPage {},
-                                class: "btn-navbar-register",
-                                "Sign Up"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        main { class: "app-main-content", Outlet::<Route> {} }
     }
 }
