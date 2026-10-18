@@ -50,7 +50,7 @@ EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h|help)
-            echo "Usage: $0 [up|down|db|logs|--test-backend|--test-frontend|--test-all] [--threads <N>] [extra-cargo-flags...]"
+            echo "Usage: $0 [up|down|db|logs|clean|prune|--test-backend|--test-frontend|--test-all] [--threads <N>] [extra-cargo-flags...]"
             exit 0
             ;;
         --threads=*)
@@ -65,7 +65,7 @@ while [[ $# -gt 0 ]]; do
             THREADS="$2"
             shift 2
             ;;
-        up|start|down|stop|db|logs|--test-backend|test-backend|--test-frontend|test-frontend|--test-all|test-all)
+        up|start|down|stop|db|logs|clean|reset-db|prune|clean-all|--test-backend|test-backend|--test-frontend|test-frontend|--test-all|test-all)
             if [[ -z "$ACTION" ]]; then
                 ACTION="$1"
             else
@@ -94,6 +94,14 @@ fi
 case "$ACTION" in
     down|stop)
         stop_containers
+        exit 0
+        ;;
+    clean|reset-db)
+        ./scripts/clean_docker.sh --volumes
+        exit 0
+        ;;
+    prune|clean-all)
+        ./scripts/clean_docker.sh --all
         exit 0
         ;;
     db)
