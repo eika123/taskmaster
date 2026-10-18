@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
-#[allow(unused_imports)]
-use crate::types::{Permission, Task, TaskMessage, TaskStatus, User};
+use crate::types::{Task, TaskMessage, TaskStatus};
+
+#[cfg(feature = "server")]
+use crate::types::{Permission, User};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;

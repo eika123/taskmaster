@@ -1,11 +1,12 @@
 use dioxus::prelude::*;
+
 use crate::types::{
-    Organization, Permission, Project, ProjectInviteDirectory, ProjectMember,
+    Organization, Project, ProjectInviteDirectory, ProjectMember,
     ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule, User,
 };
 
 #[cfg(feature = "server")]
-use crate::types::{OrganizationSummary, ProjectInviteCandidate};
+use crate::types::{OrganizationSummary, Permission, ProjectInviteCandidate};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;

@@ -1,8 +1,11 @@
 use dioxus::prelude::*;
 use crate::types::{
-    has_perm, Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation,
-    OrgRoleRuleItem, Permission,
+    Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation,
+    OrgRoleRuleItem,
 };
+
+#[cfg(feature = "server")]
+use crate::types::{has_perm, Permission};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
