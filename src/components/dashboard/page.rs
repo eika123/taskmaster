@@ -1,18 +1,15 @@
 use dioxus::prelude::*;
-use crate::backend::app_endpoints::{get_user_dashboard_data, get_users};
+use crate::backend::app_endpoints::get_user_dashboard_data;
+use crate::components::projects::InviteProjectMemberModal;
 use super::{
     CreateOrgModal, CreateProjectModal, DashboardInbox, DashboardOrganizations, DashboardProjects,
-    InviteMemberModal, ManageOrgModal,
+    ManageOrgModal,
 };
 
 #[component]
 pub fn DashboardPage() -> Element {
     let mut dashboard_resource = use_server_future(move || async move {
         get_user_dashboard_data().await
-    })?;
-
-    let users_resource = use_server_future(|| async move {
-        get_users().await
     })?;
 
     let mut show_create_project = use_signal(|| false);
@@ -24,11 +21,6 @@ pub fn DashboardPage() -> Element {
     let dashboard_data = match &*data_read {
         Some(Ok(d)) => Some(d.clone()),
         _ => None,
-    };
-
-    let all_users = match &*users_resource.read() {
-        Some(Ok(users)) => users.clone(),
-        _ => Vec::new(),
     };
 
     rsx! {
@@ -84,11 +76,14 @@ pub fn DashboardPage() -> Element {
             }
 
             if let Some((pid, pname)) = active_invite_proj.read().clone() {
-                InviteMemberModal {
+                InviteProjectMemberModal {
                     project_id: pid,
-                    project_name: pname,
-                    all_users: all_users.clone(),
+                    project_name: Some(pname),
                     on_close: move |_| active_invite_proj.set(None),
+                    on_invited: move |_| {
+                        active_invite_proj.set(None);
+                        dashboard_resource.restart();
+                    },
                 }
             }
 

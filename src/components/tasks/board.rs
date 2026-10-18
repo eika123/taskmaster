@@ -7,9 +7,10 @@ use crate::backend::app_endpoints::{
 };
 use crate::types::TaskStatus;
 use super::column::TaskColumn;
-use super::modals::{InlineCreateTaskModal, InlineInviteModal};
+use super::modals::InlineCreateTaskModal;
 use super::org_modal::ProjectOrganizationsModal;
 use crate::components::dashboard::ConfirmDeleteModal;
+use crate::components::projects::InviteProjectMemberModal;
 
 #[component]
 pub fn TaskView(project_id: Option<i64>) -> Element {
@@ -46,7 +47,7 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
         }
     })?;
 
-    let assignable_users_resource = use_server_future(move || async move {
+    let mut assignable_users_resource = use_server_future(move || async move {
         get_project_assignable_users(pid).await
     })?;
 
@@ -295,10 +296,14 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
             }
 
             if *show_invite_modal.read() && pid.is_some() {
-                InlineInviteModal {
+                InviteProjectMemberModal {
                     project_id: pid.unwrap(),
-                    current_users: current_users.clone(),
+                    project_name: project_info.as_ref().map(|p| p.name.clone()),
                     on_close: move |_| show_invite_modal.set(false),
+                    on_invited: move |_| {
+                        show_invite_modal.set(false);
+                        assignable_users_resource.restart();
+                    },
                 }
             }
 

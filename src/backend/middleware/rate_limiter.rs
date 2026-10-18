@@ -61,6 +61,10 @@ pub async fn get_rate_limiter() -> &'static RateLimiter {
 mod tests {
     use super::*;
 
+    /// Verifies IP/Email login brute-force rate limiter:
+    /// - Tracks failure count up to the configured threshold (3 attempts).
+    /// - Flags the account as rate-limited once threshold is reached.
+    /// - Clears and resets failure state upon a successful login.
     #[tokio::test]
     async fn test_rate_limiter() {
         let limiter = RateLimiter::new(3, std::time::Duration::from_secs(5));

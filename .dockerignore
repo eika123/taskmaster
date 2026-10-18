@@ -1,0 +1,21 @@
+# Ignore build artifacts except the Dioxus web+server bundle
+target/*
+!target/dx/
+target/dx/*
+!target/dx/todolist/
+target/dx/todolist/*
+!target/dx/todolist/debug/
+!target/dx/todolist/release/
+target/dx/todolist/debug/*
+!target/dx/todolist/debug/web/
+target/dx/todolist/debug/web/server-*
+target/dx/todolist/release/*
+!target/dx/todolist/release/web/
+target/dx/todolist/release/web/server-*
+
+# Ignore version control and local development artifacts
+.git
+.gitignore
+data/*.db
+data/*.db-*
+

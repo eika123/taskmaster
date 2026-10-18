@@ -1,13 +1,42 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "server", derive(sqlx::Type))]
-#[cfg_attr(feature = "server", sqlx(rename_all = "snake_case"))]
 pub enum TaskStatus {
     Suggested,
     Accepted,
     Assigned,
     InProgress,
     Finished,
+}
+
+#[cfg(feature = "server")]
+impl sqlx::Type<sqlx::Postgres> for TaskStatus {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "server")]
+impl<'q> sqlx::Encode<'q, sqlx::Postgres> for TaskStatus {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+        <&str as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&self.as_str(), buf)
+    }
+}
+
+#[cfg(feature = "server")]
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for TaskStatus {
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        let s = <&str as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
+        s.parse::<Self>().map_err(Into::into)
+    }
 }
 
 impl TaskStatus {
@@ -211,6 +240,31 @@ pub struct OrgRoleRuleItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct OrganizationSummary {
+    pub id: i64,
+    pub name: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectInviteCandidate {
+    pub id: i64,
+    pub name: String,
+    pub email: String,
+    pub organization_ids: Vec<i64>,
+    pub organizations_display: String,
+    pub is_member: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectInviteDirectory {
+    pub organizations: Vec<OrganizationSummary>,
+    pub candidates: Vec<ProjectInviteCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct ProjectInvitation {
     pub project_id: i64,
     pub project_name: String,
@@ -223,6 +277,7 @@ pub struct ProjectInvitation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct OrganizationInvitation {
     pub organization_id: i64,
     pub organization_name: String,
@@ -235,6 +290,7 @@ pub struct OrganizationInvitation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct GovernanceTransferOffer {
     pub organization_id: i64,
     pub organization_name: String,
@@ -244,6 +300,7 @@ pub struct GovernanceTransferOffer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct ProjectLeadershipTransferOffer {
     pub project_id: i64,
     pub project_name: String,
@@ -298,4 +355,25 @@ pub fn is_valid_email(email: &str) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_valid_email() {
+        // Valid email formats
+        assert!(is_valid_email("user@example.com"));
+        assert!(is_valid_email("jane.doe@sub.domain.org"));
+        assert!(is_valid_email("  alice@company.co.uk  "));
+
+        // Custom TLD & boundary rules
+        assert!(!is_valid_email("user@example"), "Requires a dot-separated domain");
+        assert!(!is_valid_email("user@example."), "Trailing dot should be invalid");
+        assert!(!is_valid_email("user@example.c"), "TLD must be at least 2 characters");
+        assert!(!is_valid_email("user@.example.com"), "Domain cannot start with dot");
+        assert!(!is_valid_email("plainaddress"), "Missing @ and domain");
+    }
+}
+
 

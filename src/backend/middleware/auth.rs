@@ -3,17 +3,20 @@ use crate::types::User;
 
 #[cfg(feature = "server")]
 #[derive(Clone, Debug)]
-pub struct SqlxSqliteSessionPool(pub sqlx::SqlitePool);
+pub struct SqlxPostgresSessionPool(pub sqlx::PgPool);
+
+#[cfg(feature = "server")]
+pub type SqlxSqliteSessionPool = SqlxPostgresSessionPool;
 
 #[cfg(feature = "server")]
 #[async_trait::async_trait]
-impl axum_session::DatabasePool for SqlxSqliteSessionPool {
+impl axum_session::DatabasePool for SqlxPostgresSessionPool {
     async fn initiate(&self, table_name: &str) -> Result<(), axum_session::DatabaseError> {
         let query = format!(
             "CREATE TABLE IF NOT EXISTS {table_name} (
                 id TEXT PRIMARY KEY NOT NULL,
                 session TEXT NOT NULL,
-                expires INTEGER NOT NULL
+                expires BIGINT NOT NULL
             );"
         );
         sqlx::query(&query)
@@ -28,7 +31,7 @@ impl axum_session::DatabasePool for SqlxSqliteSessionPool {
         let count: i64 = sqlx::query_scalar(&query)
             .fetch_one(&self.0)
             .await
-            .map_err(|e| ax_session_database_err(e))?;
+            .map_err(ax_session_database_err)?;
         Ok(count)
     }
 
@@ -41,7 +44,7 @@ impl axum_session::DatabasePool for SqlxSqliteSessionPool {
     ) -> Result<(), axum_session::DatabaseError> {
         let query = format!(
             "INSERT INTO {table_name} (id, session, expires) VALUES ($1, $2, $3)
-             ON CONFLICT(id) DO UPDATE SET session = excluded.session, expires = excluded.expires"
+             ON CONFLICT(id) DO UPDATE SET session = EXCLUDED.session, expires = EXCLUDED.expires"
         );
         sqlx::query(&query)
             .bind(id)
@@ -61,7 +64,7 @@ impl axum_session::DatabasePool for SqlxSqliteSessionPool {
             .bind(now)
             .fetch_optional(&self.0)
             .await
-            .map_err(|e| ax_session_database_err(e))?;
+            .map_err(ax_session_database_err)?;
         Ok(session)
     }
 
@@ -83,7 +86,7 @@ impl axum_session::DatabasePool for SqlxSqliteSessionPool {
             .bind(now)
             .fetch_one(&self.0)
             .await
-            .map_err(|e| ax_session_database_err(e))?;
+            .map_err(ax_session_database_err)?;
         Ok(exists)
     }
 
@@ -94,7 +97,7 @@ impl axum_session::DatabasePool for SqlxSqliteSessionPool {
             .bind(now)
             .fetch_all(&self.0)
             .await
-            .map_err(|e| ax_session_database_err(e))?;
+            .map_err(ax_session_database_err)?;
 
         let delete_query = format!("DELETE FROM {table_name} WHERE expires <= $1");
         sqlx::query(&delete_query)
@@ -122,7 +125,7 @@ impl axum_session::DatabasePool for SqlxSqliteSessionPool {
             .bind(now)
             .fetch_all(&self.0)
             .await
-            .map_err(|e| ax_session_database_err(e))?;
+            .map_err(ax_session_database_err)?;
         Ok(ids)
     }
 
@@ -137,12 +140,12 @@ fn ax_session_database_err(err: sqlx::Error) -> axum_session::DatabaseError {
 }
 
 #[cfg(feature = "server")]
-pub type AppAuthSession = axum_session_auth::AuthSession<User, i64, SqlxSqliteSessionPool, sqlx::SqlitePool>;
+pub type AppAuthSession = axum_session_auth::AuthSession<User, i64, SqlxPostgresSessionPool, sqlx::PgPool>;
 
 #[cfg(feature = "server")]
 pub async fn create_session_store(
-    pool: sqlx::SqlitePool,
-) -> Result<axum_session::SessionStore<SqlxSqliteSessionPool>, anyhow::Error> {
+    pool: sqlx::PgPool,
+) -> Result<axum_session::SessionStore<SqlxPostgresSessionPool>, anyhow::Error> {
     let session_config = axum_session::SessionConfig::default()
         .with_table_name("sessions")
         .with_session_name("flowtask_session")
@@ -150,8 +153,8 @@ pub async fn create_session_store(
         .with_secure(false)
         .with_mode(axum_session::SessionMode::Persistent);
 
-    let session_store = axum_session::SessionStore::<SqlxSqliteSessionPool>::new(
-        Some(SqlxSqliteSessionPool(pool)),
+    let session_store = axum_session::SessionStore::<SqlxPostgresSessionPool>::new(
+        Some(SqlxPostgresSessionPool(pool)),
         session_config,
     )
     .await?;
@@ -160,34 +163,26 @@ pub async fn create_session_store(
 
 #[cfg(feature = "server")]
 pub fn create_auth_layer(
-    pool: sqlx::SqlitePool,
-) -> axum_session_auth::AuthSessionLayer<User, i64, SqlxSqliteSessionPool, sqlx::SqlitePool> {
+    pool: sqlx::PgPool,
+) -> axum_session_auth::AuthSessionLayer<User, i64, SqlxPostgresSessionPool, sqlx::PgPool> {
     let auth_config = axum_session_auth::AuthConfig::<i64>::default();
-    axum_session_auth::AuthSessionLayer::<User, i64, SqlxSqliteSessionPool, sqlx::SqlitePool>::new(Some(pool))
+    axum_session_auth::AuthSessionLayer::<User, i64, SqlxPostgresSessionPool, sqlx::PgPool>::new(Some(pool))
         .with_config(auth_config)
 }
 
 #[cfg(feature = "server")]
 pub fn is_public_path(path: &str) -> bool {
-    path == "/"
-        || path == "/login"
-        || path == "/register"
-        || path == "/favicon.ico"
-        || path.starts_with("/assets")
-        || path.starts_with("/wasm")
-        || path.starts_with("/_dioxus")
-        || path.starts_with("/api/login")
-        || path.starts_with("/api/register")
-        || path.starts_with("/api/get_current_user")
-        || path.starts_with("/api/logout")
-        || path.ends_with(".wasm")
-        || path.ends_with(".js")
-        || path.ends_with(".css")
-        || path.ends_with(".ico")
-        || path.ends_with(".png")
-        || path.ends_with(".jpg")
-        || path.ends_with(".svg")
-        || path.ends_with(".map")
+    const PREFIXES: &[&str] = &[
+        "/assets", "/wasm", "/_dioxus", "/api/login", "/api/register",
+        "/api/get_current_user", "/api/logout",
+    ];
+    const EXTENSIONS: &[&str] = &[
+        ".wasm", ".js", ".css", ".ico", ".png", ".jpg", ".svg", ".map",
+    ];
+
+    matches!(path, "/" | "/login" | "/register" | "/favicon.ico")
+        || PREFIXES.iter().any(|&p| path.starts_with(p))
+        || EXTENSIONS.iter().any(|&e| path.ends_with(e))
 }
 
 #[cfg(feature = "server")]
@@ -259,11 +254,13 @@ pub async fn auth_header_to_cookie_middleware(
 mod tests {
     use super::*;
 
+    /// Verifies PostgreSQL session storage implementation: table initiation, session persistence,
+    /// existence checks, serialized payload retrieval, and deletion.
     #[tokio::test]
-    async fn test_sqlite_session_pool() {
+    async fn test_postgres_session_pool() {
         use axum_session::DatabasePool;
         let pool = crate::backend::database::get_db().await;
-        let session_pool = SqlxSqliteSessionPool(pool.clone());
+        let session_pool = SqlxPostgresSessionPool(pool.clone());
         session_pool.initiate("sessions").await.unwrap();
 
         let session_id = "test_session_id_123";
@@ -280,9 +277,11 @@ mod tests {
         assert!(!session_pool.exists(session_id, "sessions").await.unwrap());
     }
 
+    /// Verifies the URI path classification logic: public routes and static assets bypass auth,
+    /// while protected UI and API routes are blocked.
     #[test]
     fn test_public_path_rules() {
-        // Public paths
+        // Public paths (static assets, WASM bundles, auth pages)
         assert!(is_public_path("/"));
         assert!(is_public_path("/login"));
         assert!(is_public_path("/register"));
@@ -296,7 +295,7 @@ mod tests {
         assert!(is_public_path("/api/get_current_user12345"));
         assert!(is_public_path("/api/logout12345"));
 
-        // Protected paths
+        // Protected paths (tasks, administrative APIs, project dashboards)
         assert!(!is_public_path("/tasks"));
         assert!(!is_public_path("/task/1"));
         assert!(!is_public_path("/task/new"));
@@ -307,6 +306,9 @@ mod tests {
         assert!(!is_public_path("/api/set_task_status12345"));
     }
 
+    /// Verifies that auth_guard_middleware blocks unauthenticated requests:
+    /// - API endpoints receive HTTP 401 Unauthorized JSON response.
+    /// - Web pages receive HTTP 303 See Other redirecting to /login.
     #[tokio::test]
     async fn test_auth_guard_middleware_blocks_unauthenticated() {
         use axum::{body::Body, routing::post, Router};
@@ -317,28 +319,29 @@ mod tests {
             .route("/tasks", axum::routing::get(|| async { "tasks page" }))
             .layer(axum::middleware::from_fn(auth_guard_middleware));
 
-        // 1. Unauthenticated request to protected API must return 401
-        let req = axum::extract::Request::builder()
+        // 1. Unauthenticated request to protected API must return 401 Unauthorized
+        let api_request = axum::extract::Request::builder()
             .uri("/api/get_all_tasks123")
             .method("POST")
             .body(Body::empty())
             .unwrap();
 
-        let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), http::StatusCode::UNAUTHORIZED);
+        let api_response = app.clone().oneshot(api_request).await.unwrap();
+        assert_eq!(api_response.status(), http::StatusCode::UNAUTHORIZED);
 
         // 2. Unauthenticated request to protected HTML page must redirect to /login
-        let req = axum::extract::Request::builder()
+        let page_request = axum::extract::Request::builder()
             .uri("/tasks")
             .method("GET")
             .body(Body::empty())
             .unwrap();
 
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), http::StatusCode::SEE_OTHER);
-        assert_eq!(resp.headers().get("location").unwrap(), "/login");
+        let page_response = app.oneshot(page_request).await.unwrap();
+        assert_eq!(page_response.status(), http::StatusCode::SEE_OTHER);
+        assert_eq!(page_response.headers().get("location").unwrap(), "/login");
     }
 
+    /// Verifies server-side rendering (SSR) of the login page through Axum/Dioxus server router.
     #[tokio::test]
     async fn test_render_login_page() {
         use axum::body::{to_bytes, Body};
@@ -364,15 +367,15 @@ mod tests {
 
 #[cfg(feature = "server")]
 #[async_trait::async_trait]
-impl axum_session_auth::Authentication<User, i64, sqlx::SqlitePool> for User {
-    async fn load_user(userid: i64, pool: Option<&sqlx::SqlitePool>) -> Result<User, anyhow::Error> {
+impl axum_session_auth::Authentication<User, i64, sqlx::PgPool> for User {
+    async fn load_user(userid: i64, pool: Option<&sqlx::PgPool>) -> Result<User, anyhow::Error> {
         let pool = match pool {
-            Some(p) => p,
-            None => crate::backend::database::get_db().await,
+            Some(p) => p.clone(),
+            None => crate::backend::database::get_db().await.clone(),
         };
-        let user = sqlx::query_as::<_, User>("SELECT id, name, email FROM user WHERE id = $1")
+        let user = sqlx::query_as::<_, User>("SELECT id, name, email FROM \"user\" WHERE id = $1")
             .bind(userid)
-            .fetch_one(pool)
+            .fetch_one(&pool)
             .await
             .map_err(|e| anyhow::anyhow!("User {userid} not found: {e}"))?;
         Ok(user)

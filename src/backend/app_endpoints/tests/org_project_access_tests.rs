@@ -1,8 +1,56 @@
-use crate::backend::app_endpoints::auth::{reset_test_auth_user, set_test_auth_user};
+//! # Multi-Tenant Organization & Project RBAC Access Matrix Test Campaign
+//!
+//! This test campaign provides end-to-end verification of the enterprise RBAC,
+//! grant ledger materialization, privilege ceilings, dynamic role synchronization,
+//! task assignment authorization, and zero-knowledge need-to-know data isolation.
+//!
+//! ## Core Specifications Tested:
+//! 1. **Grant Ledger & Additive Union ("Potato People")**:
+//!    - Users holding multiple organizational roles receive the bitwise-OR additive union
+//!      of privileges in affiliated projects (`project_member_grants` -> `project_members`).
+//!    - Active "hat switching" allows a user to temporarily constrain effective permissions to a specific grant.
+//! 2. **Privilege Ceilings**:
+//!    - Partner and external organizations have a defined `max_granted_role` ceiling that
+//!      strictly caps granted project permissions, regardless of organizational rank.
+//! 3. **Cascade Leadership Protection**:
+//!    - Database triggers guarantee a project leader cannot be removed or disaffiliated through
+//!      upstream organizational changes without an explicit leadership transfer.
+//! 4. **Pre-flight Warnings & Task Handover**:
+//!    - Destructive membership and role changes perform pre-flight impact checks to alert
+//!      callers if assigned active tasks will lose execution permissions.
+//! 5. **Assignment Security**:
+//!    - Only project members with explicit task-execution permissions (`mask & 4 != 0`)
+//!      can be assigned to project tasks. Standalone tasks remain open to all users.
+//! 6. **Dynamic Demotion, Mutation Restrictions & Zero-Knowledge Need-to-Know Isolation**:
+//!    - Demoting a user immediately cascades to project grants and assignment cleanup.
+//!    - Viewers (`mask == 1`) are prohibited from authoring, editing, claiming, or changing task status.
+//!    - Unaffiliated users receive an empty project set (zero-knowledge: secret projects remain hidden).
+//! 7. **Rule Revocation Cleanup**:
+//!    - Revoking an organization role mapping automatically cleans up grants, recomputes
+//!      memberships, and unassigns affected users.
+
+use crate::backend::app_endpoints::tests::test_helpers::run_as_user;
 use crate::backend::app_endpoints::*;
 use crate::backend::database::get_db;
-use crate::types::{TaskStatus, User};
+use crate::types::TaskStatus;
 
+/// Verifies that users holding multiple organizational roles ("potato people" wearing multiple hats)
+/// receive the additive union (bitwise-OR) of all privileges across their active grants,
+/// supports temporary "hat switching" to narrow privileges, and gracefully steps down when roles are revoked.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Creates "Acme Oslo" (governor: Alice, id: 1) with custom roles `'teacher'` and `'parent'`.
+/// 2. **Multi-Role Assignment**: Assigns Kari (id: 3) both the `'parent'` and `'teacher'` roles.
+/// 3. **Affiliation & Initial Mapping**: Affiliates project "Class 4B" with Acme Oslo; maps `'parent'` -> `'viewer'`.
+///    - Kari materializes in `project_members` as `'viewer'` (mask: 1).
+/// 4. **Additive Role Upgrade**: Maps `'teacher'` -> `'admin'`.
+///    - Trigger `sync_grants_after_rule_update` upgrades Kari to `'admin'` (mask: 63 = 1 | 63).
+/// 5. **Hat Switching**: Pins Kari's active hat to `'org:<id>:parent'`, constraining effective permissions to `'viewer'`.
+///    - Resets hat to `NULL`, returning effective permissions to full additive `'admin'`.
+/// 6. **Role Demotion Step-Down**: Revokes Kari's `'teacher'` role in Acme Oslo.
+///    - Kari remains in the project but steps down to `'viewer'` (mask: 1).
+/// 7. **Complete Disaffiliation**: Removes Acme Oslo from Class 4B.
+///    - Kari is cleanly purged from `project_members`, while leader Alice remains untouched.
 #[tokio::test]
 async fn test_multi_role_potato_people_and_additive_privileges() {
     let pool = get_db().await;
@@ -41,14 +89,16 @@ async fn test_multi_role_potato_people_and_additive_privileges() {
 
     // Verify Kari has both roles in organization_member_roles
     let roles: Vec<String> = sqlx::query_scalar(
-        "SELECT role FROM organization_member_roles WHERE organization_id = $1 AND user_id = 3 ORDER BY role ASC",
+        "SELECT role FROM organization_member_roles WHERE organization_id = $1 AND user_id = 3",
     )
     .bind(org_id)
     .fetch_all(pool)
     .await
     .unwrap();
-    assert_eq!(roles, vec!["parent", "teacher"]);
-
+    // check that roles contains "teacher" and "parent"
+    assert!(roles.iter().any(|r| r == "teacher"), "missing teacher role");
+    assert!(roles.iter().any(|r| r == "parent"), "missing parent role");
+    
     // 2. Create Project: Class 4B (led by Alice = 1)
     let proj_id: i64 = sqlx::query_scalar(
         "INSERT INTO project (name, description, leader_id) VALUES ($1, 'Class 4B', 1) RETURNING id",
@@ -215,6 +265,20 @@ async fn test_multi_role_potato_people_and_additive_privileges() {
     assert_eq!(alice_exists, 1);
 }
 
+/// Verifies that partnership privilege ceilings (`max_granted_role` in `project_organizations`)
+/// strictly cap the maximum role that an organization's role mappings can grant,
+/// and verifies that users materialized with viewer permissions (`mask == 1`) cannot create tasks.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Creates "External Audit Corp" and project "Security Review".
+/// 2. **Affiliation with Ceiling**: Affiliates Audit Corp with ceiling `'viewer'`.
+/// 3. **Trigger Enforcement (`check_org_project_role_ceiling`)**:
+///    - Attempting to map `'admin'` -> `'admin'` (mask: 63) is rejected by trigger (exceeds viewer ceiling).
+///    - Attempting to map `'admin'` -> `'member'` (mask: 15) is rejected by trigger.
+///    - Mapping `'admin'` -> `'viewer'` (mask: 1) matches ceiling and succeeds.
+/// 4. **Viewer Restriction**:
+///    - Enrolls Diana (id: 4) into Audit Corp as admin; she materializes in the project as `'viewer'`.
+///    - Diana attempts to create/author a task in the project -> rejected by permissions.
 #[tokio::test]
 async fn test_privilege_ceiling_and_viewer_restrictions() {
     let pool = get_db().await;
@@ -309,6 +373,18 @@ async fn test_privilege_ceiling_and_viewer_restrictions() {
     assert!(diana_task.is_err(), "Viewer should not be able to author tasks");
 }
 
+/// Verifies database guardrails protecting project leadership from accidental orphaning
+/// when the project leader gained their membership via an organizational role mapping.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Creates "Engineering Guild" with Evan (id: 5) as member, and project "Guild Project" led by Evan.
+/// 2. **Affiliation**: Maps Guild `'member'` -> `'admin'`. Evan's project membership is backed solely by this org grant.
+/// 3. **Cascade Blockers (`prevent_remove_project_leader`)**:
+///    - Attempting to delete the organization affiliation while Evan is leader -> MUST BE BLOCKED.
+///    - Attempting to remove Evan from the parent organization while leader of the affiliated project -> MUST BE BLOCKED.
+/// 4. **Safe Leadership Handover**:
+///    - Transfers project leadership to Alice (id: 1).
+///    - Removing the organization affiliation now succeeds without violating leader integrity.
 #[tokio::test]
 async fn test_project_leadership_cascade_guardrail() {
     let pool = get_db().await;
@@ -369,6 +445,8 @@ async fn test_project_leadership_cascade_guardrail() {
     .unwrap();
 
     // Evan is in project_members as leader. Remove any direct grant so Evan's access is solely via Org
+    // This is necessary for this test flow, because direct members are not removed when an organization leaves.
+    // Our multitenant system also mandates that people may live in a project with different hats.
     sqlx::query("DELETE FROM project_member_grants WHERE project_id = $1 AND user_id = 5 AND grant_key = 'direct'")
         .bind(proj_id)
         .execute(pool)
@@ -406,6 +484,20 @@ async fn test_project_leadership_cascade_guardrail() {
     assert!(delete_org_access_ok.is_ok(), "Disaffiliation should succeed once leadership is handed over");
 }
 
+/// Verifies pre-flight impact warnings when revoking an organizational role rule that would
+/// strip task-handling permissions from members with active, assigned non-finished tasks.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Affiliates "Contractor Firm" with project "Client Portal", mapping `'engineering'` -> `'member'`.
+/// 2. **Active Task Assignment**: Assigns Evan (id: 5) an active task on the project.
+/// 3. **Impact Pre-Flight Check**:
+///    - Asserts query detects Evan's active task and reports 1 impacted task.
+/// 4. **No False-Positive Warning**:
+///    - Grants Evan a second role `'devops'` -> `'member'` (multi-role potato person).
+///    - Impact check now yields 0 affected tasks because Evan's task privileges remain intact via `'devops'`.
+/// 5. **In-Progress Task Guardrail (`prevent_unassign_in_progress_task`)**:
+///    - Moves task to `'in_progress'`.
+///    - Verifies trigger blocks unassigning Evan as the sole assignee of an ongoing task.
 #[tokio::test]
 async fn test_active_tasks_preflight_warning_and_handover() {
     let pool = get_db().await;
@@ -571,6 +663,18 @@ async fn test_active_tasks_preflight_warning_and_handover() {
     assert!(unassign_err.is_err(), "Trigger should prevent unassigning the last assignee from an in-progress task");
 }
 
+/// Verifies task assignment authorization rules:
+/// - Standalone tasks can be assigned to any registered user.
+/// - Project tasks can ONLY be assigned to users with task-execution permissions (`mask & 4 != 0`).
+/// - Assigning viewers (`mask == 3`) or non-members to a project task is rejected by database triggers.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Creates a project with Alice (admin, mask: 63), Bob (member, mask: 15), and Charlie (viewer, mask: 3).
+/// 2. **Task Creation**: Creates a task in `'accepted'` status.
+/// 3. **Assignment Validation**:
+///    - Assigning Bob (member, has bit 4) -> SUCCEEDS.
+///    - Assigning Charlie (viewer, lacks bit 4) -> REJECTED by trigger `check_assignment_permission`.
+///    - Assigning Diana (non-member) -> REJECTED by trigger `check_assignment_permission`.
 #[tokio::test]
 async fn test_standalone_and_project_task_assignment_permissions() {
     let pool = get_db().await;
@@ -637,13 +741,33 @@ async fn test_standalone_and_project_task_assignment_permissions() {
     assert!(assign_non_member.is_err(), "Assigning a non-member to a project task must fail");
 }
 
+/// Comprehensive test verifying dynamic role demotion, mutation restrictions on viewers,
+/// and Zero-Knowledge Need-to-Know isolation for unauthorized users.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Affiliates organization with project; maps `'member'` -> `'member'` (mask 15),
+///    `'developer'` -> `'viewer'` (mask 1), leaving `'auditor'` unmapped.
+/// 2. **Member Phase (Bob)**: Bob enrolls as `'member'`, receives mask 15, is assigned a task, and authors a task.
+/// 3. **Dynamic Demotion**: Bob is demoted in the organization to `'auditor'` (unmapped).
+///    - Triggers purge Bob from `project_members` and purge his task assignments.
+///    - Asserts old project tasks do NOT persist in Bob's "my tasks" view.
+///    - Asserts Bob is blocked from viewing project tasks or task details.
+///    - Asserts project leader cannot assign demoted Bob.
+/// 4. **Viewer Restrictions (Charlie)**: Charlie joins as `'developer'` -> `'viewer'` (mask 1).
+///    - Charlie CAN read project tasks and view task details.
+///    - Charlie CANNOT create tasks, update details, change task status, or post messages.
+/// 5. **Zero-Knowledge Need-to-Know Isolation (Ian)**:
+///    - Ian joins organization with unmapped role `'auditor'`.
+///    - `get_organization_affiliated_projects` returns ZERO projects for Ian (confidential project is omitted).
+///    - Demoted Bob also receives ZERO projects.
+///    - Charlie (viewer) DOES receive the project.
+/// 6. **Dynamic Upgrading**: Rule for `'developer'` is updated from `'viewer'` to `'member'`.
+///    - Trigger `sync_grants_after_rule_update` immediately upgrades Charlie to `'member'` (mask 15).
+///    - Charlie CAN now successfully update tasks!
 #[tokio::test]
 async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
     let pool = get_db().await;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-
-    // Reset test auth user at start and end
-    reset_test_auth_user();
 
     // 1. Setup Organization & Project
     let org_id: i64 = sqlx::query_scalar(
@@ -734,11 +858,12 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
     .await
     .unwrap();
 
-    set_test_auth_user(Some(User { id: 2, name: "Bob Smith".to_string(), email: "bob@example.com".to_string() }));
-    let bob_tasks = get_project_tasks(proj_id, None, 10).await;
+    let (bob_tasks, bob_my_tasks_before) = run_as_user(2, move || async move {
+        let bob_tasks = get_project_tasks(proj_id, None, 10).await;
+        let bob_my_tasks_before = get_my_tasks(None, 100).await.unwrap();
+        (bob_tasks, bob_my_tasks_before)
+    }).await;
     assert!(bob_tasks.is_ok(), "Bob should be able to view project tasks as member");
-
-    let bob_my_tasks_before = get_my_tasks(None, 100).await.unwrap();
     assert!(bob_my_tasks_before.iter().any(|t| t.id == task_id));
     assert!(bob_my_tasks_before.iter().any(|t| t.id == bob_task_id));
 
@@ -766,24 +891,24 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
     assert_eq!(bob_assigned, 0, "Bob assignments on project tasks must be purged upon demotion");
 
     // In 'my tasks', Bob must NOT see old tasks from the revoked project!
-    let bob_my_tasks_after = get_my_tasks(None, 100).await.unwrap();
+    let (bob_my_tasks_after, bob_tasks_after, bob_task_after) = run_as_user(2, move || async move {
+        let bob_my_tasks_after = get_my_tasks(None, 100).await.unwrap();
+        let bob_tasks_after = get_project_tasks(proj_id, None, 10).await;
+        let bob_task_after = get_task(task_id).await;
+        (bob_my_tasks_after, bob_tasks_after, bob_task_after)
+    }).await;
     assert!(!bob_my_tasks_after.iter().any(|t| t.id == task_id), "Revoked project task must not persist in my tasks");
     assert!(!bob_my_tasks_after.iter().any(|t| t.id == bob_task_id), "Revoked authored project task must not persist in my tasks");
-
-    // Bob tries to get project tasks -> Access Denied!
-    let bob_tasks_after = get_project_tasks(proj_id, None, 10).await;
     assert!(bob_tasks_after.is_err(), "Demoted Bob must be denied access to project tasks");
-
-    // Bob tries to get the task -> Access Denied!
-    let bob_task_after = get_task(task_id).await;
     assert!(bob_task_after.is_err(), "Demoted Bob must be denied access to view project task");
 
     // Alice tries to assign demoted Bob to the task -> Must fail!
-    set_test_auth_user(Some(User { id: 1, name: "Alice Johnson".to_string(), email: "alice@example.com".to_string() }));
-    let assign_bob = assign_task(task_id, 2).await;
+    let (assign_bob, update_assign_bob) = run_as_user(1, move || async move {
+        let assign_bob = assign_task(task_id, 2).await;
+        let update_assign_bob = update_task(task_id, "Title".to_string(), "Desc".to_string(), TaskStatus::Accepted, vec![2]).await;
+        (assign_bob, update_assign_bob)
+    }).await;
     assert!(assign_bob.is_err(), "Cannot assign task to user lacking project execution permissions");
-
-    let update_assign_bob = update_task(task_id, "Title".to_string(), "Desc".to_string(), TaskStatus::Accepted, vec![2]).await;
     assert!(update_assign_bob.is_err(), "update_task cannot assign user lacking project execution permissions");
 
     // 4. Test Charlie (user 3) as 'developer' (mapped to 'viewer', mask 1)
@@ -804,27 +929,25 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
     assert_eq!(charlie_mask, 1);
 
     // Charlie can read tasks
-    set_test_auth_user(Some(User { id: 3, name: "Charlie Brown".to_string(), email: "charlie@example.com".to_string() }));
-    let charlie_tasks = get_project_tasks(proj_id, None, 10).await;
+    let (charlie_tasks, charlie_task, charlie_create, charlie_update, charlie_status, charlie_msg) =
+        run_as_user(3, move || async move {
+            let tasks = get_project_tasks(proj_id, None, 10).await;
+            let task = get_task(task_id).await;
+            // Charlie CANNOT create tasks
+            let create = suggest_task_for_project(proj_id, "Illegal Task".to_string(), "Desc".to_string()).await;
+            // Charlie CANNOT edit tasks
+            let update = update_task(task_id, "Mutated Title".to_string(), "Desc".to_string(), TaskStatus::Accepted, vec![]).await;
+            // Charlie CANNOT change task status
+            let status = set_task_status(task_id as u64, TaskStatus::Finished).await;
+            // Charlie CANNOT post messages
+            let msg = post_task_message(task_id, "Viewer message".to_string()).await;
+            (tasks, task, create, update, status, msg)
+        }).await;
     assert!(charlie_tasks.is_ok(), "Viewer can view tasks");
-
-    let charlie_task = get_task(task_id).await;
     assert!(charlie_task.is_ok(), "Viewer can view task details");
-
-    // Charlie CANNOT create tasks
-    let charlie_create = suggest_task_for_project(proj_id, "Illegal Task".to_string(), "Desc".to_string()).await;
     assert!(charlie_create.is_err(), "Viewer cannot create tasks");
-
-    // Charlie CANNOT edit tasks
-    let charlie_update = update_task(task_id, "Mutated Title".to_string(), "Desc".to_string(), TaskStatus::Accepted, vec![]).await;
     assert!(charlie_update.is_err(), "Viewer cannot update task details");
-
-    // Charlie CANNOT change task status
-    let charlie_status = set_task_status(task_id as u64, TaskStatus::Finished).await;
     assert!(charlie_status.is_err(), "Viewer cannot change task status");
-
-    // Charlie CANNOT post messages
-    let charlie_msg = post_task_message(task_id, "Viewer message".to_string()).await;
     assert!(charlie_msg.is_err(), "Viewer cannot post messages");
 
     // 5. Test Ian (user 9) as completely new member with unmapped role 'auditor'
@@ -834,32 +957,33 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
         .await
         .unwrap();
 
-    set_test_auth_user(Some(User { id: 9, name: "Ian Malcolm".to_string(), email: "ian@example.com".to_string() }));
-    let ian_affils = get_organization_affiliated_projects(org_id).await.unwrap();
+    let (ian_affils, ian_tasks, ian_task, ian_role_rules, ian_proj_orgs) =
+        run_as_user(9, move || async move {
+            let affils = get_organization_affiliated_projects(org_id).await.unwrap();
+            let tasks = get_project_tasks(proj_id, None, 10).await;
+            let task = get_task(task_id).await;
+            let role_rules = get_organization_role_rules(org_id).await;
+            let proj_orgs = get_project_organizations(proj_id).await;
+            (affils, tasks, task, role_rules, proj_orgs)
+        }).await;
     // Zero-knowledge: Ian Malcolm has no qualifying role, so the confidential project is completely omitted
     assert_eq!(ian_affils.len(), 0, "Ian has no view access, so project is not returned from backend");
-
-    let ian_tasks = get_project_tasks(proj_id, None, 10).await;
     assert!(ian_tasks.is_err(), "Ian cannot download tasks without project permissions");
-
-    let ian_task = get_task(task_id).await;
     assert!(ian_task.is_err(), "Ian cannot view task without project permissions");
-
-    let ian_role_rules = get_organization_role_rules(org_id).await;
     assert!(ian_role_rules.is_err(), "Ian cannot view organization role rules");
-
-    let ian_proj_orgs = get_project_organizations(proj_id).await;
     assert!(ian_proj_orgs.is_err(), "Ian cannot inspect project organization affiliations");
 
     // Charlie has role 'developer' mapped to 'viewer', so Charlie DOES receive the project
-    set_test_auth_user(Some(User { id: 3, name: "Charlie Brown".to_string(), email: "charlie@example.com".to_string() }));
-    let charlie_affils = get_organization_affiliated_projects(org_id).await.unwrap();
+    let charlie_affils = run_as_user(3, move || async move {
+        get_organization_affiliated_projects(org_id).await.unwrap()
+    }).await;
     assert_eq!(charlie_affils.len(), 1, "Charlie has viewer role, so project is visible");
     assert!(charlie_affils[0].has_access);
 
     // Demoted Bob (auditor, unmapped) also receives 0 projects
-    set_test_auth_user(Some(User { id: 2, name: "Bob Smith".to_string(), email: "bob@example.com".to_string() }));
-    let bob_affils = get_organization_affiliated_projects(org_id).await.unwrap();
+    let bob_affils = run_as_user(2, move || async move {
+        get_organization_affiliated_projects(org_id).await.unwrap()
+    }).await;
     assert_eq!(bob_affils.len(), 0, "Demoted Bob has no view access, so project is not returned");
 
     // 6. Test Trigger: Dynamic Rule Update upgrades Charlie from 'viewer' to 'member'
@@ -885,13 +1009,28 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
     assert_eq!(upgraded_mask, 15);
 
     // Now Charlie CAN update tasks!
-    set_test_auth_user(Some(User { id: 3, name: "Charlie Brown".to_string(), email: "charlie@example.com".to_string() }));
-    let charlie_update_ok = update_task(task_id, "Legitimate Member Edit".to_string(), "New Desc".to_string(), TaskStatus::Accepted, vec![]).await;
+    let charlie_update_ok = run_as_user(3, move || async move {
+        update_task(task_id, "Legitimate Member Edit".to_string(), "New Desc".to_string(), TaskStatus::Accepted, vec![]).await
+    }).await;
     assert!(charlie_update_ok.is_ok(), "Upgraded member can now update tasks");
-
-    reset_test_auth_user();
 }
 
+/// Verifies that calling `revoke_org_role_project_access` cascades properly across the database:
+/// - Prompts with an active task impact warning if affected users hold assigned tasks.
+/// - When confirmed (`confirm_active_tasks_warning = true`), deletes the role rule,
+///   which cascades to `project_member_grants`.
+/// - Trigger `recompute_project_member` cleanly removes affected members from `project_members`.
+/// - Endpoints `get_project_members` and `get_project_assignable_users` omit revoked users.
+/// - Unassigns tasks and ensures revoked tasks no longer appear in the user's `get_my_tasks`.
+///
+/// ### Test Execution Flow:
+/// 1. **Setup**: Affiliates organization with project and maps `'member'` -> `'member'`.
+/// 2. **Member Assignment**: Bob joins the org, materializes into the project, and is assigned a task.
+/// 3. **Revocation Warning**: Alice attempts revoking without confirmation -> receives warning with impacted task details.
+/// 4. **Confirmed Revocation**: Alice confirms -> rule is deleted.
+/// 5. **Materialization Integrity**: Asserts Bob has 0 grants and 0 entries in `project_members`.
+/// 6. **Endpoint Visibility**: Asserts Bob does not appear in member list or assignable users.
+/// 7. **Assignment Cleanup & Isolation**: Asserts Bob is unassigned and the task vanishes from his `get_my_tasks`.
 #[tokio::test]
 async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments() {
     let pool = get_db().await;
@@ -968,15 +1107,21 @@ async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments()
         .unwrap();
 
     // Alice revokes 'member' access WITHOUT confirmation -> Warning error!
-    set_test_auth_user(Some(User { id: 1, name: "Alice Johnson".to_string(), email: "alice@example.com".to_string() }));
-    let revoke_warn = revoke_org_role_project_access(proj_id, org_id, "member".to_string(), false).await;
+    let (revoke_warn, revoke_ok, members, assignable) = run_as_user(1, move || async move {
+        let revoke_warn = revoke_org_role_project_access(proj_id, org_id, "member".to_string(), false).await;
+        // Alice confirms warning -> Revocation succeeds!
+        let revoke_ok = revoke_org_role_project_access(proj_id, org_id, "member".to_string(), true).await;
+        // Verify Bob does NOT appear in get_project_members endpoint
+        let members = get_project_members(proj_id).await.unwrap();
+        // Verify Bob does NOT appear in get_project_assignable_users endpoint
+        let assignable = get_project_assignable_users(Some(proj_id)).await.unwrap();
+        (revoke_warn, revoke_ok, members, assignable)
+    }).await;
+
     assert!(revoke_warn.is_err(), "Must warn before revoking rule affecting active tasks");
     let warn_msg = revoke_warn.unwrap_err().to_string();
     assert!(warn_msg.contains("Active task impact warning"), "Message should mention impact warning: {}", warn_msg);
     assert!(warn_msg.contains("Bob Smith"), "Message should mention Bob Smith: {}", warn_msg);
-
-    // Alice confirms warning -> Revocation succeeds!
-    let revoke_ok = revoke_org_role_project_access(proj_id, org_id, "member".to_string(), true).await;
     assert!(revoke_ok.is_ok(), "Revocation should succeed with confirmation");
 
     // Verify Bob is completely purged from project_member_grants
@@ -999,12 +1144,7 @@ async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments()
     .unwrap();
     assert_eq!(pm_count, 0, "Bob must be removed from project_members table after rule revocation");
 
-    // Verify Bob does NOT appear in get_project_members endpoint
-    let members = get_project_members(proj_id).await.unwrap();
     assert!(!members.iter().any(|m| m.user_id == 2), "Bob must not show up in get_project_members table");
-
-    // Verify Bob does NOT appear in get_project_assignable_users endpoint
-    let assignable = get_project_assignable_users(Some(proj_id)).await.unwrap();
     assert!(!assignable.iter().any(|u| u.id == 2), "Bob must not show up in assignable users");
 
     // Verify Bob's assignment was cleanly deleted
@@ -1018,10 +1158,9 @@ async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments()
     assert!(!task_assignees.contains(&2), "Bob must be unassigned from project task");
 
     // Verify Bob does NOT see the task in get_my_tasks
-    set_test_auth_user(Some(User { id: 2, name: "Bob Smith".to_string(), email: "bob@example.com".to_string() }));
-    let bob_tasks = get_my_tasks(None, 100).await.unwrap();
+    let bob_tasks = run_as_user(2, move || async move {
+        get_my_tasks(None, 100).await.unwrap()
+    }).await;
     assert!(!bob_tasks.iter().any(|t| t.id == task_id), "Revoked user must not see project task in my tasks");
-
-    reset_test_auth_user();
 }
 

@@ -55,6 +55,10 @@ pub fn generate_token() -> String {
 mod tests {
     use super::*;
 
+    /// Verifies Argon2id password hashing and password verification with server pepper:
+    /// - Output uses the standardized Argon2id PHC format `$argon2id$v=19$...`.
+    /// - Exact password passes verification.
+    /// - Incorrect password fails verification.
     #[test]
     fn test_password_hashing_and_verification() {
         let password = "SuperSecretPassword123!";
@@ -68,10 +72,11 @@ mod tests {
         assert!(!is_invalid, "Wrong password must fail verification");
     }
 
+    /// Verifies backwards-compatibility against seeded database password hashes.
     #[test]
     fn test_verify_existing_db_hash() {
-        let hash = "$argon2id$v=19$m=19456,t=2,p=1$7Qk0X0PIR5SuTQmBcdeqfQ$NOqm0J876/r/RCYG3rMGQmOZj27hgKE3DwzKjiJ5tYs";
-        let is_valid = verify_password("password123", hash).expect("Verification should succeed");
-        println!("IS VALID WITH CURRENT ALGO: {}", is_valid);
+        let seeded_hash = "$argon2id$v=19$m=19456,t=2,p=1$7Qk0X0PIR5SuTQmBcdeqfQ$NOqm0J876/r/RCYG3rMGQmOZj27hgKE3DwzKjiJ5tYs";
+        let is_valid = verify_password("password123", seeded_hash).expect("Verification should succeed");
+        assert!(is_valid, "Seeded user passwords must verify with Argon2id");
     }
 }

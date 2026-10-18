@@ -126,7 +126,7 @@ pub async fn assign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError
         }
     }
 
-    sqlx::query("INSERT OR IGNORE INTO assignments (task_id, assigned_to) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(task_id)
         .bind(user_id)
         .execute(pool)
@@ -196,7 +196,7 @@ pub async fn get_my_tasks(
                 task.description, task.status 
          FROM task 
          LEFT JOIN project ON task.project_id = project.id
-         LEFT JOIN user u_author ON task.author = u_author.id 
+         LEFT JOIN \"user\" u_author ON task.author = u_author.id 
          LEFT JOIN assignments ON task.id = assignments.task_id
          WHERE (assignments.assigned_to = $1 OR task.author = $1)
            AND (
@@ -227,11 +227,11 @@ pub async fn get_my_tasks(
 
     let task_ids: Vec<i64> = raw_tasks.iter().map(|t| t.id).collect();
     let query_str = format!(
-        "SELECT assignments.task_id, user.id, user.name, user.email 
+        "SELECT assignments.task_id, u.id, u.name, u.email 
          FROM assignments 
-         INNER JOIN user ON assignments.assigned_to = user.id 
+         INNER JOIN \"user\" u ON assignments.assigned_to = u.id 
          WHERE assignments.task_id IN ({}) 
-         ORDER BY user.name ASC",
+         ORDER BY u.name ASC",
         task_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
     );
 
@@ -320,11 +320,11 @@ pub async fn get_project_tasks(
     let raw_tasks = sqlx::query_as::<_, RawTask>(
         "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
                 task.title, task.author,
-                COALESCE(user.name, 'Deleted User') AS author_name, 
+                COALESCE(u.name, 'Deleted User') AS author_name, 
                 task.description, task.status 
          FROM task 
          LEFT JOIN project ON task.project_id = project.id
-         LEFT JOIN user ON task.author = user.id 
+         LEFT JOIN \"user\" u ON task.author = u.id 
          WHERE task.project_id = $1 AND task.id > $2 
          ORDER BY task.id ASC 
          LIMIT $3",
@@ -342,11 +342,11 @@ pub async fn get_project_tasks(
 
     let task_ids: Vec<i64> = raw_tasks.iter().map(|t| t.id).collect();
     let query_str = format!(
-        "SELECT assignments.task_id, user.id, user.name, user.email 
+        "SELECT assignments.task_id, u.id, u.name, u.email 
          FROM assignments 
-         INNER JOIN user ON assignments.assigned_to = user.id 
+         INNER JOIN \"user\" u ON assignments.assigned_to = u.id 
          WHERE assignments.task_id IN ({}) 
-         ORDER BY user.name ASC",
+         ORDER BY u.name ASC",
         task_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
     );
 
@@ -402,11 +402,11 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
     let raw = sqlx::query_as::<_, RawTask>(
         "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
                 task.title, task.author,
-                COALESCE(user.name, 'Deleted User') AS author_name, 
+                COALESCE(u.name, 'Deleted User') AS author_name, 
                 task.description, task.status 
          FROM task 
          LEFT JOIN project ON task.project_id = project.id
-         LEFT JOIN user ON task.author = user.id 
+         LEFT JOIN \"user\" u ON task.author = u.id 
          WHERE task.id = $1",
     )
     .bind(task_id)
@@ -437,11 +437,11 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
     }
 
     let assignees = sqlx::query_as::<_, User>(
-        "SELECT user.id, user.name, user.email 
+        "SELECT u.id, u.name, u.email 
          FROM assignments 
-         INNER JOIN user ON assignments.assigned_to = user.id 
+         INNER JOIN \"user\" u ON assignments.assigned_to = u.id 
          WHERE assignments.task_id = $1 
-         ORDER BY user.name ASC",
+         ORDER BY u.name ASC",
     )
     .bind(task_id)
     .fetch_all(pool)
@@ -584,7 +584,7 @@ pub async fn update_task(
     }
 
     for user_id in &assignee_ids {
-        sqlx::query("INSERT OR IGNORE INTO assignments (task_id, assigned_to) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(task_id)
             .bind(*user_id)
             .execute(&mut *tx)
@@ -791,7 +791,7 @@ pub async fn get_task_messages(task_id: i64) -> Result<Vec<TaskMessage>, ServerF
                 COALESCE(u.name, 'Deleted User') AS author_name,
                 tm.created_at, tm.msg
          FROM task_message tm
-         LEFT JOIN user u ON tm.author_id = u.id
+         LEFT JOIN \"user\" u ON tm.author_id = u.id
          WHERE tm.task_id = $1
          ORDER BY tm.msg_id ASC",
     )
@@ -818,10 +818,10 @@ pub async fn post_task_message(task_id: i64, msg: String) -> Result<TaskMessage,
             $1,
             COALESCE((SELECT MAX(msg_id) FROM task_message WHERE task_id = $1), 0) + 1,
             $2,
-            unixepoch(),
+            EXTRACT(EPOCH FROM NOW())::BIGINT,
             $3
          )
-         RETURNING task_id, msg_id, author_id, $4 AS author_name, created_at, msg",
+         RETURNING task_id, msg_id, author_id, $4::TEXT AS author_name, created_at, msg",
     )
     .bind(task_id)
     .bind(user.id)

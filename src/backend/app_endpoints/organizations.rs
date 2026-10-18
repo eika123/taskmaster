@@ -4,6 +4,8 @@ use crate::types::{Organization, OrganizationMember, OrganizationPendingInvite, 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
 #[cfg(feature = "server")]
+use crate::backend::app_endpoints::auth_helpers::*;
+#[cfg(feature = "server")]
 use crate::backend::database::get_db;
 
 #[server]
@@ -14,7 +16,7 @@ pub async fn get_user_organizations() -> Result<Vec<Organization>, ServerFnError
     let orgs = sqlx::query_as::<_, Organization>(
         "SELECT o.id, o.name, o.slug, o.governing_user_id, u.name AS governing_user_name, o.created_at
          FROM organization o
-         INNER JOIN user u ON o.governing_user_id = u.id
+         INNER JOIN \"user\" u ON o.governing_user_id = u.id
          WHERE o.governing_user_id = $1
             OR EXISTS (SELECT 1 FROM organization_members om WHERE om.organization_id = o.id AND om.user_id = $1)
          ORDER BY o.id ASC",
@@ -49,17 +51,15 @@ pub async fn create_organization(
         .await
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
-    let res = sqlx::query(
-        "INSERT INTO organization (name, slug, governing_user_id) VALUES ($1, $2, $3)",
+    let org_id: i64 = sqlx::query_scalar(
+        "INSERT INTO organization (name, slug, governing_user_id) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(name_clean)
     .bind(&slug_clean)
     .bind(user.id)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to create organization: {e}")))?;
-
-    let org_id = res.last_insert_rowid();
 
     sqlx::query(
         "INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')",
@@ -77,7 +77,7 @@ pub async fn create_organization(
     let org = sqlx::query_as::<_, Organization>(
         "SELECT o.id, o.name, o.slug, o.governing_user_id, u.name AS governing_user_name, o.created_at
          FROM organization o
-         INNER JOIN user u ON o.governing_user_id = u.id
+         INNER JOIN \"user\" u ON o.governing_user_id = u.id
          WHERE o.id = $1",
     )
     .bind(org_id)
@@ -106,12 +106,7 @@ pub async fn delete_organization(organization_id: i64, confirmation: String) -> 
         ));
     }
 
-    let expected = format!("DELETE {}", name.trim());
-    if confirmation.trim() != expected {
-        return Err(ServerFnError::new(format!(
-            "Confirmation mismatch. Please type exactly '{expected}' to delete this organization."
-        )));
-    }
+    verify_confirmation(&confirmation, &name, "organization")?;
 
     sqlx::query("DELETE FROM organization WHERE id = $1")
         .bind(organization_id)
@@ -145,11 +140,11 @@ pub async fn get_organization_members(
     let rows = sqlx::query_as::<_, MemberRow>(
         "SELECT om.organization_id, om.user_id, u.name AS user_name, u.email AS user_email,
                 om.role, om.joined_at,
-                (SELECT GROUP_CONCAT(omr.role, ',')
+                (SELECT STRING_AGG(omr.role, ',' ORDER BY omr.role)
                  FROM organization_member_roles omr
                  WHERE omr.organization_id = om.organization_id AND omr.user_id = om.user_id) AS roles_csv
          FROM organization_members om
-         INNER JOIN user u ON om.user_id = u.id
+         INNER JOIN \"user\" u ON om.user_id = u.id
          WHERE om.organization_id = $1
          ORDER BY u.name ASC",
     )
@@ -310,9 +305,9 @@ pub async fn invite_user_to_organization(
         "INSERT INTO organization_invitation (organization_id, invited_user_id, invited_by, role, message)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(organization_id, invited_user_id) DO UPDATE SET
-            role = excluded.role,
-            message = excluded.message,
-            created_at = unixepoch()",
+            role = EXCLUDED.role,
+            message = EXCLUDED.message,
+            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
     )
     .bind(organization_id)
     .bind(invited_user_id)
@@ -366,7 +361,7 @@ pub async fn respond_to_organization_invitation(
         sqlx::query(
             "INSERT INTO organization_members (organization_id, user_id, role)
              VALUES ($1, $2, $3)
-             ON CONFLICT(organization_id, user_id) DO UPDATE SET role = excluded.role",
+             ON CONFLICT(organization_id, user_id) DO UPDATE SET role = EXCLUDED.role",
         )
         .bind(organization_id)
         .bind(user.id)
@@ -409,10 +404,10 @@ pub async fn request_organization_governance_transfer(
 
     sqlx::query(
         "INSERT INTO organization_governance_transfer (organization_id, requested_new_governor, created_at)
-         VALUES ($1, $2, unixepoch())
+         VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::BIGINT)
          ON CONFLICT(organization_id) DO UPDATE SET
-            requested_new_governor = excluded.requested_new_governor,
-            created_at = unixepoch()",
+            requested_new_governor = EXCLUDED.requested_new_governor,
+            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
     )
     .bind(organization_id)
     .bind(requested_new_governor)
@@ -480,23 +475,7 @@ pub async fn assign_organization_member_role(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let is_admin: bool = sqlx::query_scalar(
-        "SELECT (o.governing_user_id = $1 OR EXISTS (
-            SELECT 1 FROM organization_member_roles omr
-            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-         ))
-         FROM organization o WHERE o.id = $2",
-    )
-    .bind(user.id)
-    .bind(organization_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !is_admin {
-        return Err(ServerFnError::new("Only organization admins can assign roles."));
-    }
+    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can assign roles.").await?;
 
     let role_clean = role.trim();
     if role_clean.is_empty() {
@@ -505,7 +484,7 @@ pub async fn assign_organization_member_role(
 
     sqlx::query(
         "INSERT INTO organization_member_roles (organization_id, user_id, role, assigned_at)
-         VALUES ($1, $2, $3, unixepoch())
+         VALUES ($1, $2, $3, EXTRACT(EPOCH FROM NOW())::BIGINT)
          ON CONFLICT(organization_id, user_id, role) DO NOTHING",
     )
     .bind(organization_id)
@@ -528,23 +507,7 @@ pub async fn revoke_organization_member_role(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let is_admin: bool = sqlx::query_scalar(
-        "SELECT (o.governing_user_id = $1 OR EXISTS (
-            SELECT 1 FROM organization_member_roles omr
-            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-         ))
-         FROM organization o WHERE o.id = $2",
-    )
-    .bind(user.id)
-    .bind(organization_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !is_admin {
-        return Err(ServerFnError::new("Only organization admins can revoke roles."));
-    }
+    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can revoke roles.").await?;
 
     #[derive(sqlx::FromRow)]
     struct ImpactRow {
@@ -660,23 +623,7 @@ pub async fn create_organization_role(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let is_admin: bool = sqlx::query_scalar(
-        "SELECT (o.governing_user_id = $1 OR EXISTS (
-            SELECT 1 FROM organization_member_roles omr
-            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-         ))
-         FROM organization o WHERE o.id = $2",
-    )
-    .bind(user.id)
-    .bind(organization_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !is_admin {
-        return Err(ServerFnError::new("Only organization admins can create custom roles."));
-    }
+    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can create custom roles.").await?;
 
     let role_clean = role.trim().to_lowercase();
     if role_clean.is_empty() {
@@ -715,7 +662,7 @@ pub async fn get_organization(organization_id: i64) -> Result<Organization, Serv
     let org = sqlx::query_as::<_, Organization>(
         "SELECT o.id, o.name, o.slug, o.governing_user_id, u.name AS governing_user_name, o.created_at
          FROM organization o
-         INNER JOIN user u ON o.governing_user_id = u.id
+         INNER JOIN \"user\" u ON o.governing_user_id = u.id
          WHERE o.id = $1",
     )
     .bind(organization_id)
@@ -733,24 +680,7 @@ pub async fn get_organization_affiliated_projects(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    // Check if the caller is the governor or admin of this organization
-    let is_org_governor_or_admin: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM organization o
-            WHERE o.id = $1 AND (
-                o.governing_user_id = $2
-                OR EXISTS (
-                    SELECT 1 FROM organization_member_roles omr
-                    WHERE omr.organization_id = o.id AND omr.user_id = $2 AND omr.role = 'admin'
-                )
-            )
-        )",
-    )
-    .bind(organization_id)
-    .bind(user.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to verify org permissions: {e}")))?;
+    let is_org_governor_or_admin = is_org_admin(pool, organization_id, user.id).await?;
 
     #[derive(sqlx::FromRow)]
     struct RawAffiliation {
@@ -778,7 +708,7 @@ pub async fn get_organization_affiliated_projects(
            AND (
                p.leader_id = $2
                OR (pm.permissions_mask & 1) != 0
-               OR $3 = 1
+               OR $3
            )
          ORDER BY p.name ASC",
     )
@@ -821,27 +751,7 @@ pub async fn get_organization_role_rules(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let is_governor_or_admin: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM organization o
-            WHERE o.id = $1 AND (
-                o.governing_user_id = $2
-                OR EXISTS (
-                    SELECT 1 FROM organization_member_roles omr
-                    WHERE omr.organization_id = o.id AND omr.user_id = $2 AND omr.role = 'admin'
-                )
-            )
-        )",
-    )
-    .bind(organization_id)
-    .bind(user.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to verify permissions: {e}")))?;
-
-    if !is_governor_or_admin {
-        return Err(ServerFnError::new("You do not have permission to view organization role rules."));
-    }
+    ensure_org_admin(pool, organization_id, user.id, "You do not have permission to view organization role rules.").await?;
 
     let rules = sqlx::query_as::<_, OrgRoleRuleItem>(
         "SELECT pora.project_id, p.name AS project_name, pora.organization_id, pora.org_role, pora.project_role
@@ -865,25 +775,7 @@ pub async fn get_organization_pending_invitations(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let is_governor_or_admin: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM organization o
-            WHERE o.id = $1 AND (
-                o.governing_user_id = $2
-                OR EXISTS (
-                    SELECT 1 FROM organization_member_roles omr
-                    WHERE omr.organization_id = o.id AND omr.user_id = $2 AND omr.role = 'admin'
-                )
-            )
-        )",
-    )
-    .bind(organization_id)
-    .bind(user.id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to verify permissions: {e}")))?;
-
-    if !is_governor_or_admin {
+    if !is_org_admin(pool, organization_id, user.id).await? {
         return Ok(Vec::new());
     }
 
@@ -891,7 +783,7 @@ pub async fn get_organization_pending_invitations(
         "SELECT oi.organization_id, oi.invited_user_id, u.name AS invited_user_name,
                 u.email AS invited_user_email, oi.role, oi.message, oi.created_at
          FROM organization_invitation oi
-         INNER JOIN user u ON oi.invited_user_id = u.id
+         INNER JOIN \"user\" u ON oi.invited_user_id = u.id
          WHERE oi.organization_id = $1
          ORDER BY oi.created_at DESC",
     )
@@ -911,23 +803,7 @@ pub async fn cancel_organization_invitation(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let is_admin: bool = sqlx::query_scalar(
-        "SELECT (o.governing_user_id = $1 OR EXISTS (
-            SELECT 1 FROM organization_member_roles omr
-            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-         ))
-         FROM organization o WHERE o.id = $2",
-    )
-    .bind(user.id)
-    .bind(organization_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !is_admin {
-        return Err(ServerFnError::new("Only organization admins can cancel invitations."));
-    }
+    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can cancel invitations.").await?;
 
     sqlx::query("DELETE FROM organization_invitation WHERE organization_id = $1 AND invited_user_id = $2")
         .bind(organization_id)

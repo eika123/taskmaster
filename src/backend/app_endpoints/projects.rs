@@ -1,8 +1,16 @@
 use dioxus::prelude::*;
-use crate::types::{Organization, Project, ProjectMember, ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule, User};
+use crate::types::{
+    Organization, Project, ProjectInviteDirectory, ProjectMember,
+    ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule, User,
+};
+
+#[cfg(feature = "server")]
+use crate::types::{OrganizationSummary, ProjectInviteCandidate};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
+#[cfg(feature = "server")]
+use crate::backend::app_endpoints::auth_helpers::*;
 #[cfg(feature = "server")]
 use crate::backend::database::get_db;
 
@@ -16,7 +24,7 @@ pub async fn get_user_projects() -> Result<Vec<Project>, ServerFnError> {
                 p.leader_id, u.name AS leader_name, p.created_at
          FROM project p
          LEFT JOIN organization org ON p.owner_org_id = org.id
-         INNER JOIN user u ON p.leader_id = u.id
+         INNER JOIN \"user\" u ON p.leader_id = u.id
          WHERE p.leader_id = $1
             OR EXISTS (
                 SELECT 1 FROM project_members pm
@@ -41,7 +49,7 @@ pub async fn get_project(project_id: i64) -> Result<Project, ServerFnError> {
                 p.leader_id, u.name AS leader_name, p.created_at
          FROM project p
          LEFT JOIN organization org ON p.owner_org_id = org.id
-         INNER JOIN user u ON p.leader_id = u.id
+         INNER JOIN \"user\" u ON p.leader_id = u.id
          WHERE p.id = $1",
     )
     .bind(project_id)
@@ -49,34 +57,7 @@ pub async fn get_project(project_id: i64) -> Result<Project, ServerFnError> {
     .await
     .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
 
-    let can_view: bool = sqlx::query_scalar(
-        "SELECT (
-            p.leader_id = $1
-            OR EXISTS (
-                SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
-            )
-            OR (p.owner_org_id IS NOT NULL AND EXISTS (
-                SELECT 1 FROM organization o
-                WHERE o.id = p.owner_org_id AND (
-                    o.governing_user_id = $1
-                    OR EXISTS (
-                        SELECT 1 FROM organization_member_roles omr
-                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-                    )
-                )
-            ))
-         )
-         FROM project p WHERE p.id = $2",
-    )
-    .bind(user.id)
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !can_view {
+    if !can_view_project(pool, project_id, user.id).await? {
         return Err(ServerFnError::new("You do not have permission to view this project."));
     }
 
@@ -101,18 +82,16 @@ pub async fn create_project(
         .await
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
-    let res = sqlx::query(
-        "INSERT INTO project (name, description, owner_org_id, leader_id) VALUES ($1, $2, $3, $4)",
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, owner_org_id, leader_id) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(name_clean)
     .bind(description.trim())
     .bind(owner_org_id)
     .bind(user.id)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to create project: {e}")))?;
-
-    let proj_id = res.last_insert_rowid();
 
     sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, $2, 'admin', 63)")
         .bind(proj_id)
@@ -146,17 +125,8 @@ pub async fn delete_project(project_id: i64, confirmation: String) -> Result<(),
         ));
     }
 
-    let expected = format!("DELETE {}", name.trim());
-    if confirmation.trim() != expected {
-        return Err(ServerFnError::new(format!(
-            "Confirmation mismatch. Please type exactly '{expected}' to delete this project."
-        )));
-    }
+    verify_confirmation(&confirmation, &name, "project")?;
 
-    // SQLite's ON DELETE CASCADE automatically cascades deletion to tasks,
-    // assignments, messages, and member associations. The database trigger
-    // `prevent_delete_populated_project` guarantees that projects with other members
-    // cannot be deleted.
     sqlx::query("DELETE FROM project WHERE id = $1")
         .bind(project_id)
         .execute(pool)
@@ -205,34 +175,7 @@ pub async fn get_project_members(project_id: i64) -> Result<Vec<ProjectMember>, 
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let can_view: bool = sqlx::query_scalar(
-        "SELECT (
-            p.leader_id = $1
-            OR EXISTS (
-                SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
-            )
-            OR (p.owner_org_id IS NOT NULL AND EXISTS (
-                SELECT 1 FROM organization o
-                WHERE o.id = p.owner_org_id AND (
-                    o.governing_user_id = $1
-                    OR EXISTS (
-                        SELECT 1 FROM organization_member_roles omr
-                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-                    )
-                )
-            ))
-         )
-         FROM project p WHERE p.id = $2",
-    )
-    .bind(user.id)
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !can_view {
+    if !can_view_project(pool, project_id, user.id).await? {
         return Err(ServerFnError::new("You do not have permission to view members of this project."));
     }
 
@@ -241,7 +184,7 @@ pub async fn get_project_members(project_id: i64) -> Result<Vec<ProjectMember>, 
                 pm.role, (pm.granted_by_org_role != 0) AS granted_by_org_role,
                 pm.permissions_mask, pm.active_grant_key, pm.joined_at
          FROM project_members pm
-         INNER JOIN user u ON pm.user_id = u.id
+         INNER JOIN \"user\" u ON pm.user_id = u.id
          WHERE pm.project_id = $1
          ORDER BY u.name ASC",
     )
@@ -265,7 +208,7 @@ pub async fn get_my_project_member(
                 pm.role, (pm.granted_by_org_role != 0) AS granted_by_org_role,
                 pm.permissions_mask, pm.active_grant_key, pm.joined_at
          FROM project_members pm
-         INNER JOIN user u ON pm.user_id = u.id
+         INNER JOIN \"user\" u ON pm.user_id = u.id
          WHERE pm.project_id = $1 AND pm.user_id = $2",
     )
     .bind(project_id)
@@ -284,28 +227,12 @@ pub async fn get_project_assignable_users(
     let user = get_auth_user().await?;
     let pool = get_db().await;
     if let Some(pid) = project_id {
-        let can_view: bool = sqlx::query_scalar(
-            "SELECT (p.leader_id = $1 OR EXISTS (
-                SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
-             ))
-             FROM project p WHERE p.id = $2",
-        )
-        .bind(user.id)
-        .bind(pid)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-        .unwrap_or(false);
-
-        if !can_view {
-            return Err(ServerFnError::new("You do not have permission to view assignable users for this project."));
-        }
+        ensure_project_perm(pool, pid, user.id, 1, "You do not have permission to view assignable users for this project.").await?;
 
         let users = sqlx::query_as::<_, User>(
             "SELECT u.id, u.name, u.email
              FROM project_members pm
-             JOIN user u ON pm.user_id = u.id
+             JOIN \"user\" u ON pm.user_id = u.id
              WHERE pm.project_id = $1 AND (pm.permissions_mask & 4) != 0
              ORDER BY u.name ASC",
         )
@@ -317,7 +244,7 @@ pub async fn get_project_assignable_users(
         Ok(users)
     } else {
         let users = sqlx::query_as::<_, User>(
-            "SELECT id, name, email FROM user ORDER BY name ASC",
+            "SELECT id, name, email FROM \"user\" ORDER BY name ASC",
         )
         .fetch_all(pool)
         .await
@@ -341,9 +268,9 @@ pub async fn invite_user_to_project(
         "INSERT INTO project_invitation (project_id, invited_user_id, invited_by, role, message)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(project_id, invited_user_id) DO UPDATE SET
-            role = excluded.role,
-            message = excluded.message,
-            created_at = unixepoch()",
+            role = EXCLUDED.role,
+            message = EXCLUDED.message,
+            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
     )
     .bind(project_id)
     .bind(invited_user_id)
@@ -395,7 +322,7 @@ pub async fn respond_to_project_invitation(
         sqlx::query(
             "INSERT INTO project_members (project_id, user_id, role)
              VALUES ($1, $2, $3)
-             ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role",
+             ON CONFLICT(project_id, user_id) DO UPDATE SET role = EXCLUDED.role",
         )
         .bind(project_id)
         .bind(user.id)
@@ -432,10 +359,10 @@ pub async fn request_project_leadership_transfer(
 
     sqlx::query(
         "INSERT INTO project_leadership_transfer (project_id, requested_new_leader, created_at)
-         VALUES ($1, $2, unixepoch())
+         VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::BIGINT)
          ON CONFLICT(project_id) DO UPDATE SET
-            requested_new_leader = excluded.requested_new_leader,
-            created_at = unixepoch()",
+            requested_new_leader = EXCLUDED.requested_new_leader,
+            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
     )
     .bind(project_id)
     .bind(requested_new_leader)
@@ -503,20 +430,7 @@ pub async fn affiliate_organization_with_project(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    // Must be project leader or project admin (permissions_mask & 32 != 0)
-    let is_admin: bool = sqlx::query_scalar(
-        "SELECT (permissions_mask & 32) != 0 FROM project_members WHERE project_id = $1 AND user_id = $2",
-    )
-    .bind(project_id)
-    .bind(user.id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !is_admin {
-        return Err(ServerFnError::new("Only project admins can affiliate organizations."));
-    }
+    ensure_project_perm(pool, project_id, user.id, 32, "Only project admins can affiliate organizations.").await?;
 
     let rel = relationship_type.trim().to_lowercase();
     if !["owner", "partner", "contractor", "auditor"].contains(&rel.as_str()) {
@@ -585,7 +499,7 @@ pub async fn remove_organization_from_project(
     let impacts: Vec<ImpactRow> = sqlx::query_as(
         "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, u.name AS user_name
          FROM project_member_grants pmg
-         JOIN user u ON pmg.user_id = u.id
+         JOIN \"user\" u ON pmg.user_id = u.id
          JOIN assignments a ON a.assigned_to = u.id
          JOIN task t ON t.id = a.task_id AND t.project_id = $1
          WHERE pmg.project_id = $1
@@ -625,7 +539,7 @@ pub async fn remove_organization_from_project(
     // If confirmed, unassign non-in_progress tasks
     for imp in &impacts {
         if imp.status != "in_progress" {
-            sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = (SELECT id FROM user WHERE name = $2)")
+            sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = (SELECT id FROM \"user\" WHERE name = $2)")
                 .bind(imp.task_id)
                 .bind(&imp.user_name)
                 .execute(&mut *tx)
@@ -657,34 +571,7 @@ pub async fn get_project_organizations(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let can_view: bool = sqlx::query_scalar(
-        "SELECT (
-            p.leader_id = $1
-            OR EXISTS (
-                SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
-            )
-            OR (p.owner_org_id IS NOT NULL AND EXISTS (
-                SELECT 1 FROM organization o
-                WHERE o.id = p.owner_org_id AND (
-                    o.governing_user_id = $1
-                    OR EXISTS (
-                        SELECT 1 FROM organization_member_roles omr
-                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-                    )
-                )
-            ))
-         )
-         FROM project p WHERE p.id = $2",
-    )
-    .bind(user.id)
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !can_view {
+    if !can_view_project(pool, project_id, user.id).await? {
         return Err(ServerFnError::new("You do not have permission to view this project."));
     }
 
@@ -714,34 +601,17 @@ pub async fn set_org_role_project_access(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    // Caller must be org governor or org admin
-    let is_org_admin: bool = sqlx::query_scalar(
-        "SELECT (o.governing_user_id = $1 OR EXISTS (
-            SELECT 1 FROM organization_member_roles omr
-            WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-         ))
-         FROM organization o WHERE o.id = $2",
-    )
-    .bind(user.id)
-    .bind(organization_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !is_org_admin {
-        return Err(ServerFnError::new("Only organization admins can configure project role mappings."));
-    }
+    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can configure project role mappings.").await?;
 
     let p_role = project_role.trim().to_lowercase();
     let o_role = org_role.trim().to_string();
 
-    // The database trigger check_org_project_role_ceiling_insert will check against max_granted_role!
+    // The database trigger check_org_project_role_ceiling will check against max_granted_role!
     sqlx::query(
         "INSERT INTO project_org_role_access (project_id, organization_id, org_role, project_role)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT(project_id, organization_id, org_role) DO UPDATE SET
-            project_role = excluded.project_role",
+            project_role = EXCLUDED.project_role",
     )
     .bind(project_id)
     .bind(organization_id)
@@ -796,7 +666,7 @@ pub async fn revoke_org_role_project_access(
     let impacts: Vec<ImpactRow> = sqlx::query_as(
         "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, u.id AS user_id, u.name AS user_name
          FROM project_member_grants pmg
-         JOIN user u ON pmg.user_id = u.id
+         JOIN \"user\" u ON pmg.user_id = u.id
          JOIN assignments a ON a.assigned_to = u.id
          JOIN task t ON t.id = a.task_id AND t.project_id = $1
          WHERE pmg.project_id = $1
@@ -858,14 +728,8 @@ pub async fn revoke_org_role_project_access(
             .map_err(|e| ServerFnError::new(format!("Failed to unassign task: {e}")))?;
     }
 
-    sqlx::query("DELETE FROM project_member_grants WHERE project_id = $1 AND source_org_id = $2 AND source_org_role = $3")
-        .bind(project_id)
-        .bind(organization_id)
-        .bind(&org_role)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to delete grants: {e}")))?;
-
+    // Deleting from project_org_role_access automatically cascades to project_member_grants
+    // and triggers recompute_project_member in PostgreSQL!
     sqlx::query("DELETE FROM project_org_role_access WHERE project_id = $1 AND organization_id = $2 AND org_role = $3")
         .bind(project_id)
         .bind(organization_id)
@@ -873,19 +737,6 @@ pub async fn revoke_org_role_project_access(
         .execute(&mut *tx)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to revoke role rule: {e}")))?;
-
-    sqlx::query(
-        "DELETE FROM project_members
-         WHERE project_id = $1
-           AND NOT EXISTS (
-               SELECT 1 FROM project_member_grants
-               WHERE project_id = $1 AND user_id = project_members.user_id
-           )"
-    )
-    .bind(project_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to sync project members: {e}")))?;
 
     tx.commit()
         .await
@@ -901,34 +752,7 @@ pub async fn get_project_org_role_access(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let can_view: bool = sqlx::query_scalar(
-        "SELECT (
-            p.leader_id = $1
-            OR EXISTS (
-                SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
-            )
-            OR (p.owner_org_id IS NOT NULL AND EXISTS (
-                SELECT 1 FROM organization o
-                WHERE o.id = p.owner_org_id AND (
-                    o.governing_user_id = $1
-                    OR EXISTS (
-                        SELECT 1 FROM organization_member_roles omr
-                        WHERE omr.organization_id = o.id AND omr.user_id = $1 AND omr.role = 'admin'
-                    )
-                )
-            ))
-         )
-         FROM project p WHERE p.id = $2",
-    )
-    .bind(user.id)
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-    .unwrap_or(false);
-
-    if !can_view {
+    if !can_view_project(pool, project_id, user.id).await? {
         return Err(ServerFnError::new("You do not have permission to view this project."));
     }
 
@@ -1018,17 +842,11 @@ pub async fn set_active_project_hat(
             .map_err(|e| ServerFnError::new(format!("Failed to set active hat: {e}")))?;
         }
         None => {
-            // Reset to union of all grants
             sqlx::query(
                 "UPDATE project_members
                  SET active_grant_key = NULL,
                      permissions_mask = (
-                         SELECT (MAX(prd.permissions_mask & 1))
-                              | (MAX(prd.permissions_mask & 2))
-                              | (MAX(prd.permissions_mask & 4))
-                              | (MAX(prd.permissions_mask & 8))
-                              | (MAX(prd.permissions_mask & 16))
-                              | (MAX(prd.permissions_mask & 32))
+                         SELECT BIT_OR(prd.permissions_mask)
                          FROM project_member_grants pmg
                          JOIN project_role_definition prd ON prd.role = pmg.project_role
                          WHERE pmg.project_id = $1 AND pmg.user_id = $2
@@ -1044,8 +862,8 @@ pub async fn set_active_project_hat(
             sqlx::query(
                 "UPDATE project_members
                  SET role = CASE
-                     WHEN permissions_mask & 32 != 0 THEN 'admin'
-                     WHEN permissions_mask & 4 != 0 THEN 'member'
+                     WHEN (permissions_mask & 32) != 0 THEN 'admin'
+                     WHEN (permissions_mask & 4) != 0 THEN 'member'
                      ELSE 'viewer'
                  END
                  WHERE project_id = $1 AND user_id = $2",
@@ -1073,7 +891,7 @@ pub async fn get_available_organizations_for_project(
     let orgs = sqlx::query_as::<_, Organization>(
         "SELECT o.id, o.name, o.slug, o.governing_user_id, u.name AS governing_user_name, o.created_at
          FROM organization o
-         INNER JOIN user u ON o.governing_user_id = u.id
+         INNER JOIN \"user\" u ON o.governing_user_id = u.id
          WHERE o.id NOT IN (
              SELECT po.organization_id FROM project_organizations po WHERE po.project_id = $1
          )
@@ -1085,6 +903,74 @@ pub async fn get_available_organizations_for_project(
     .map_err(|e| ServerFnError::new(format!("Failed to fetch available organizations: {e}")))?;
 
     Ok(orgs)
+}
+
+#[server]
+pub async fn get_project_invite_directory(
+    project_id: i64,
+) -> Result<ProjectInviteDirectory, ServerFnError> {
+    let pool = get_db().await;
+
+    let organizations = sqlx::query_as::<_, OrganizationSummary>(
+        "SELECT id, name, slug FROM organization ORDER BY name ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch organizations: {e}")))?;
+
+    #[derive(sqlx::FromRow)]
+    struct CandidateRow {
+        id: i64,
+        name: String,
+        email: String,
+        organization_ids: Vec<i64>,
+        organizations_display: String,
+        is_member: bool,
+    }
+
+    let rows = sqlx::query_as::<_, CandidateRow>(
+        "SELECT u.id, u.name, u.email,
+                COALESCE(
+                    (SELECT ARRAY_AGG(om.organization_id)
+                     FROM organization_members om
+                     WHERE om.user_id = u.id),
+                    '{}'
+                ) AS organization_ids,
+                COALESCE(
+                    (SELECT STRING_AGG(DISTINCT o.name, ', ' ORDER BY o.name)
+                     FROM organization_members om
+                     JOIN organization o ON o.id = om.organization_id
+                     WHERE om.user_id = u.id),
+                    'External'
+                ) AS organizations_display,
+                EXISTS (
+                    SELECT 1 FROM project_members pm
+                    WHERE pm.project_id = $1 AND pm.user_id = u.id
+                ) AS is_member
+         FROM \"user\" u
+         ORDER BY u.name ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch invite candidates: {e}")))?;
+
+    let candidates = rows
+        .into_iter()
+        .map(|r| ProjectInviteCandidate {
+            id: r.id,
+            name: r.name,
+            email: r.email,
+            organization_ids: r.organization_ids,
+            organizations_display: r.organizations_display,
+            is_member: r.is_member,
+        })
+        .collect();
+
+    Ok(ProjectInviteDirectory {
+        organizations,
+        candidates,
+    })
 }
 
 

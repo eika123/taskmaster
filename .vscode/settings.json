@@ -1,0 +1,11 @@
+{
+  "rust-analyzer.cargo.features": [
+    "server",
+    "web"
+  ],
+  "rust-analyzer.check.features": [
+    "server",
+    "web"
+  ]
+}
+

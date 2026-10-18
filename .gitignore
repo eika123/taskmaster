@@ -7,4 +7,6 @@
 **/*.rs.bk
 *.db*
 *.sqlite*
-data/
+.env
+data/.env
+

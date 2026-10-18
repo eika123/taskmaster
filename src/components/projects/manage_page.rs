@@ -4,11 +4,11 @@ use crate::types::ProjectOrganization;
 use crate::backend::app_endpoints::{
     affiliate_organization_with_project, delete_project,
     get_available_organizations_for_project, get_project, get_project_members,
-    get_project_organizations, get_users, remove_organization_from_project,
+    get_project_organizations, remove_organization_from_project,
 };
 use crate::components::organizations::modals::ConfirmActiveTasksWarningModal;
 use crate::components::dashboard::ConfirmDeleteModal;
-use crate::components::tasks::InlineInviteModal;
+use crate::components::projects::InviteProjectMemberModal;
 
 #[component]
 pub fn ProjectManagePage(project_id: i64) -> Element {
@@ -26,10 +26,6 @@ pub fn ProjectManagePage(project_id: i64) -> Element {
 
     let members_resource = use_server_future(move || async move {
         get_project_members(project_id).await
-    })?;
-
-    let users_resource = use_server_future(|| async move {
-        get_users().await
     })?;
 
     let auth = use_context::<crate::components::AuthState>();
@@ -64,11 +60,6 @@ pub fn ProjectManagePage(project_id: i64) -> Element {
 
     let project_members = match &*members_resource.read() {
         Some(Ok(m)) => m.clone(),
-        _ => Vec::new(),
-    };
-
-    let all_users = match &*users_resource.read() {
-        Some(Ok(u)) => u.clone(),
         _ => Vec::new(),
     };
 
@@ -427,10 +418,14 @@ pub fn ProjectManagePage(project_id: i64) -> Element {
 
         // Direct member invitation modal
         if *show_invite_modal.read() {
-            InlineInviteModal {
+            InviteProjectMemberModal {
                 project_id,
-                current_users: all_users.clone(),
+                project_name: Some(project.name.clone()),
                 on_close: move |_| {
+                    show_invite_modal.set(false);
+                    handle_refresh();
+                },
+                on_invited: move |_| {
                     show_invite_modal.set(false);
                     handle_refresh();
                 },
