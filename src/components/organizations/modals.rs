@@ -585,12 +585,14 @@ pub fn CreateOrgProjectModal(
 ) -> Element {
     let mut proj_name = use_signal(String::new);
     let mut proj_desc = use_signal(String::new);
+    let mut proj_template = use_signal(|| "classic_kanban".to_string());
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut is_submitting = use_signal(|| false);
 
     let handle_create = move |_| {
         let name_val = proj_name.read().trim().to_string();
         let desc_val = proj_desc.read().trim().to_string();
+        let template_val = proj_template.read().clone();
 
         if name_val.is_empty() {
             error_msg.set(Some("Project name is required.".to_string()));
@@ -601,7 +603,7 @@ pub fn CreateOrgProjectModal(
         error_msg.set(None);
 
         spawn(async move {
-            match create_project(name_val, desc_val, Some(organization_id)).await {
+            match create_project(name_val, desc_val, Some(organization_id), Some(template_val)).await {
                 Ok(_) => {
                     is_submitting.set(false);
                     on_created.call(());
@@ -653,6 +655,18 @@ pub fn CreateOrgProjectModal(
                             placeholder: "Goals, objectives, or scope of this project...",
                             value: "{proj_desc}",
                             oninput: move |e| proj_desc.set(e.value()),
+                        }
+                    }
+                    div { class: "form-group",
+                        label { class: "form-label", "Workflow Pipeline Template" }
+                        select {
+                            class: "task-status-select",
+                            value: "{proj_template}",
+                            onchange: move |e| proj_template.set(e.value()),
+                            option { value: "classic_kanban", "Classic Kanban (Backlog, In Progress [WIP 5], Review [WIP 3], Done)" }
+                            option { value: "software_sprint", "Software Sprint (Triage, Backlog, Dev [WIP 4], QA [WIP 3], Deployed)" }
+                            option { value: "guild_raid_prep", "Guild Raid Prep (Signups, Roster, Consumables, Ready, Raid Complete)" }
+                            option { value: "legacy_flow", "Legacy Flow (Suggested, Accepted, Assigned, InProgress, Finished)" }
                         }
                     }
                     div { class: "overlay-footer",

@@ -12,7 +12,7 @@
 use crate::backend::app_endpoints::tasks::*;
 use crate::backend::app_endpoints::tests::test_helpers::run_as_user;
 use crate::backend::database::get_db;
-use crate::types::{BadgeVariant, Permission, StatusCategory, TaskStatus};
+use crate::types::{BadgeVariant, Permission, StatusCategory};
 
 /// 1. Verifies that creating a project automatically seeds the 5 default workflow statuses
 /// with appropriate categories, positions, and semantic flags.
@@ -116,7 +116,7 @@ async fn test_semantic_flag_allows_assignment_blocks_assignment_for_initial_stat
         .unwrap();
 
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, 'suggested') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(proj_id)
     .bind("Initial Task")
@@ -147,7 +147,9 @@ async fn test_semantic_flag_allows_assignment_blocks_assignment_for_initial_stat
         );
 
         // Transition task to Accepted (allows_assignment = true)
-        set_task_status(task_id as u64, TaskStatus::Accepted)
+        let statuses = get_project_workflow_statuses(proj_id).await.unwrap();
+        let accepted_id = statuses.iter().find(|s| s.name == "Accepted").unwrap().id;
+        move_task_workflow_status(task_id, accepted_id)
             .await
             .unwrap();
 
@@ -186,7 +188,7 @@ async fn test_semantic_flag_requires_assignee_enforces_assignment_for_in_progres
         .unwrap();
 
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, 'accepted') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author, workflow_status_id) VALUES ($1, $2, $3, $4, (SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Accepted')) RETURNING id",
     )
     .bind(proj_id)
     .bind("Unassigned Task")
@@ -197,8 +199,11 @@ async fn test_semantic_flag_requires_assignee_enforces_assignment_for_in_progres
     .unwrap();
 
     run_as_user(1, move || async move {
+        let statuses = get_project_workflow_statuses(proj_id).await.unwrap();
+        let in_progress_id = statuses.iter().find(|s| s.name == "InProgress").unwrap().id;
+
         // 1. Moving to InProgress without assignees must fail
-        let move_fail = set_task_status(task_id as u64, TaskStatus::InProgress).await;
+        let move_fail = move_task_workflow_status(task_id, in_progress_id).await;
         assert!(
             move_fail.is_err(),
             "Must reject InProgress without assignee"
@@ -208,7 +213,7 @@ async fn test_semantic_flag_requires_assignee_enforces_assignment_for_in_progres
         assign_task(task_id, 2).await.unwrap();
 
         // 3. Moving to InProgress with assignee must succeed
-        let move_ok = set_task_status(task_id as u64, TaskStatus::InProgress).await;
+        let move_ok = move_task_workflow_status(task_id, in_progress_id).await;
         assert!(move_ok.is_ok(), "Must allow InProgress with assignee");
 
         // 4. Attempting to unassign the last assignee while in InProgress must fail
@@ -261,7 +266,7 @@ async fn test_soft_wip_limit_allows_writes_and_flags_wip_exceeded() {
     .unwrap();
 
     // Insert task 1 into Accepted
-    sqlx::query("INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Task 1', 1, 'accepted', $2)")
+    sqlx::query("INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Task 1', 1, $2)")
         .bind(proj_id)
         .bind(accepted_id)
         .execute(pool)
@@ -269,7 +274,7 @@ async fn test_soft_wip_limit_allows_writes_and_flags_wip_exceeded() {
         .unwrap();
 
     // Insert task 2 into Accepted
-    sqlx::query("INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Task 2', 1, 'accepted', $2)")
+    sqlx::query("INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Task 2', 1, $2)")
         .bind(proj_id)
         .bind(accepted_id)
         .execute(pool)
@@ -283,7 +288,7 @@ async fn test_soft_wip_limit_allows_writes_and_flags_wip_exceeded() {
         assert!(!accepted.wip_exceeded, "2 tasks out of wip_limit 2 is not exceeded");
 
         // Insert task 3 (exceeding wip_limit 2): database write MUST SUCCEED (Soft WIP limit)
-        let insert3 = sqlx::query("INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Task 3', 1, 'accepted', $2)")
+        let insert3 = sqlx::query("INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Task 3', 1, $2)")
             .bind(proj_id)
             .bind(accepted_id)
             .execute(get_db().await)
@@ -337,7 +342,7 @@ async fn test_composite_fk_rejects_cross_project_workflow_status() {
 
     // Attempting to insert a task in Project A pointing to Project B's status must fail with FK violation
     let cross_project_insert = sqlx::query(
-        "INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Cross-Project Task', 1, 'accepted', $2)",
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Cross-Project Task', 1, $2)",
     )
     .bind(proj_a)
     .bind(status_b)
@@ -382,7 +387,7 @@ async fn test_status_deletion_blocked_by_on_delete_restrict_when_tasks_assigned(
     .unwrap();
 
     // Insert task into Accepted status
-    sqlx::query("INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Anchored Task', 1, 'accepted', $2)")
+    sqlx::query("INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Anchored Task', 1, $2)")
         .bind(proj_id)
         .bind(accepted_id)
         .execute(pool)
@@ -457,7 +462,7 @@ async fn test_role_gated_workflow_transition() {
 
     // Create a task in Accepted status
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Gate Task', 1, 'accepted', $2) RETURNING id",
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Gate Task', 1, $2) RETURNING id",
     )
     .bind(proj_id)
     .bind(accepted_id)
@@ -467,7 +472,7 @@ async fn test_role_gated_workflow_transition() {
 
     // 1. Bob (user 2, lacking ADMIN) attempts to move task Accepted -> Finished
     run_as_user(2, move || async move {
-        let bob_move = set_task_status(task_id as u64, TaskStatus::Finished).await;
+        let bob_move = move_task_workflow_status(task_id, finished_id).await;
         assert!(
             bob_move.is_err(),
             "Bob lacking Permission::ADMIN must be blocked from moving to Finished"
@@ -477,7 +482,7 @@ async fn test_role_gated_workflow_transition() {
 
     // 2. Alice (user 1, Admin) moves task Accepted -> Finished
     run_as_user(1, move || async move {
-        let alice_move = set_task_status(task_id as u64, TaskStatus::Finished).await;
+        let alice_move = move_task_workflow_status(task_id, finished_id).await;
         assert!(
             alice_move.is_ok(),
             "Alice with Permission::ADMIN must successfully execute gated transition"
@@ -521,9 +526,9 @@ async fn test_get_project_board_snapshot_contract() {
 
     // Create 2 tasks in this project
     sqlx::query(
-        "INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES
-         ($1, 'Snapshot Task 1', 1, 'suggested', $2),
-         ($1, 'Snapshot Task 2', 1, 'suggested', $2)",
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES
+         ($1, 'Snapshot Task 1', 1, $2),
+         ($1, 'Snapshot Task 2', 1, $2)",
     )
     .bind(proj_id)
     .bind(initial_status_id)
@@ -615,7 +620,7 @@ async fn test_move_task_workflow_status_end_to_end() {
     .unwrap();
 
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Move Target Task', 1, 'accepted', $2) RETURNING id",
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Move Target Task', 1, $2) RETURNING id",
     )
     .bind(proj_id)
     .bind(accepted_id)
@@ -627,8 +632,211 @@ async fn test_move_task_workflow_status_end_to_end() {
         let updated_task = move_task_workflow_status(task_id, finished_id)
             .await
             .unwrap();
-        assert_eq!(updated_task.workflow_status_id, Some(finished_id));
-        assert_eq!(updated_task.status, TaskStatus::Finished);
+        assert_eq!(updated_task.workflow_status_id, finished_id);
+        assert_eq!(updated_task.workflow_status_name.as_deref(), Some("Finished"));
+    })
+    .await;
+}
+
+/// 10. Verifies get_workflow_templates returns starter templates (Kanban, Guild Raid, Scrum, Legacy)
+#[tokio::test]
+async fn test_workflow_starter_templates_availability() {
+    let templates = get_workflow_templates().await.unwrap();
+    assert!(templates.len() >= 4, "Expected at least 4 starter templates");
+
+    let template_ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
+    assert!(template_ids.contains(&"classic_kanban"), "Missing Classic Kanban template");
+    assert!(template_ids.contains(&"guild_raid_prep"), "Missing Guild Raid Prep template");
+    assert!(template_ids.contains(&"software_sprint"), "Missing Software Sprint template");
+    assert!(template_ids.contains(&"legacy_flow"), "Missing Legacy Flow template");
+
+    let kanban = templates.iter().find(|t| t.id == "classic_kanban").unwrap();
+    assert_eq!(kanban.statuses.len(), 4);
+    assert!(kanban.statuses.iter().any(|s| s.is_initial));
+    assert!(kanban.statuses.iter().any(|s| s.requires_assignee));
+}
+
+/// 11. Verifies apply_workflow_template transitions existing project tasks into the new initial status
+/// and replaces existing workflow columns with the template's statuses.
+#[tokio::test]
+async fn test_apply_workflow_template_to_project() {
+    let pool = get_db().await;
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, leader_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind("Template Apply Project")
+    .bind("Testing apply_workflow_template")
+    .bind(1)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
+        .bind(proj_id)
+        .bind(Permission::ADMIN_DEFAULT.as_i64())
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Insert task in initial default status
+    let task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, author) VALUES ($1, 'Template Task', 1) RETURNING id",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    run_as_user(1, move || async move {
+        // Apply "guild_raid_prep" template
+        let new_statuses = apply_workflow_template(proj_id, "guild_raid_prep".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(new_statuses.len(), 5);
+        assert_eq!(new_statuses[0].name, "Signups");
+        assert_eq!(new_statuses[1].name, "Roster Assigned");
+        assert_eq!(new_statuses[2].name, "Consumables & Gear");
+        assert_eq!(new_statuses[3].name, "Ready for Raid");
+        assert_eq!(new_statuses[4].name, "Raid Complete");
+
+        // Verify that the task was safely remapped to the new initial status
+        let initial_status = new_statuses.iter().find(|s| s.is_initial).unwrap();
+        let task = get_task(task_id).await.unwrap();
+        assert_eq!(task.workflow_status_id, initial_status.id);
+        assert_eq!(task.workflow_status_name.as_deref(), Some("Signups"));
+    })
+    .await;
+}
+
+/// 12. Verifies creating and reordering custom workflow statuses.
+#[tokio::test]
+async fn test_create_and_reorder_workflow_statuses() {
+    let pool = get_db().await;
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, leader_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind("Reorder Status Project")
+    .bind("Testing status creation and reordering")
+    .bind(1)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
+        .bind(proj_id)
+        .bind(Permission::ADMIN_DEFAULT.as_i64())
+        .execute(pool)
+        .await
+        .unwrap();
+
+    run_as_user(1, move || async move {
+        // Create a new custom status: "QA Review"
+        let qa_status = create_workflow_status(
+            proj_id,
+            "QA Review".to_string(),
+            StatusCategory::Review,
+            BadgeVariant::Purple,
+            Some(3),
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(qa_status.name, "QA Review");
+        assert_eq!(qa_status.category, StatusCategory::Review);
+        assert_eq!(qa_status.badge_variant, BadgeVariant::Purple);
+        assert_eq!(qa_status.wip_limit, Some(3));
+
+        let mut statuses = get_project_workflow_statuses(proj_id).await.unwrap();
+        assert_eq!(statuses.len(), 6);
+
+        // Reorder statuses in reverse order
+        statuses.reverse();
+        let reordered_ids: Vec<i64> = statuses.iter().map(|s| s.id).collect();
+        reorder_workflow_statuses(proj_id, reordered_ids.clone())
+            .await
+            .unwrap();
+
+        let after_reorder = get_project_workflow_statuses(proj_id).await.unwrap();
+        let after_ids: Vec<i64> = after_reorder.iter().map(|s| s.id).collect();
+        assert_eq!(after_ids, reordered_ids, "Statuses must match requested reorder order");
+    })
+    .await;
+}
+
+/// 13. Verifies delete_workflow_status guardrail:
+/// - Fails if tasks are currently in the status and no remap target is given.
+/// - Succeeds and moves tasks when a valid remap target is supplied.
+#[tokio::test]
+async fn test_delete_workflow_status_with_remap_guardrail() {
+    let pool = get_db().await;
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, leader_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind("Delete Remap Project")
+    .bind("Testing delete remap guardrail")
+    .bind(1)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
+        .bind(proj_id)
+        .bind(Permission::ADMIN_DEFAULT.as_i64())
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let accepted_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Accepted'",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let suggested_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Suggested'",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // Insert a task into 'Accepted'
+    let task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Remap Task', 1, $2) RETURNING id",
+    )
+    .bind(proj_id)
+    .bind(accepted_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    run_as_user(1, move || async move {
+        // Attempting to delete 'Accepted' without remap must fail because it contains 1 task
+        let delete_fail = delete_workflow_status(accepted_id, None).await;
+        assert!(
+            delete_fail.is_err(),
+            "Must reject deleting status with tasks without remap target"
+        );
+
+        // Deleting with remap to 'Suggested' must succeed
+        let delete_ok = delete_workflow_status(accepted_id, Some(suggested_id)).await;
+        assert!(delete_ok.is_ok(), "Must succeed when remap target is provided");
+
+        // Verify task is now in 'Suggested'
+        let task = get_task(task_id).await.unwrap();
+        assert_eq!(task.workflow_status_id, suggested_id);
+
+        // Verify 'Accepted' is completely removed from project statuses
+        let remaining_statuses = get_project_workflow_statuses(proj_id).await.unwrap();
+        assert!(!remaining_statuses.iter().any(|s| s.id == accepted_id));
     })
     .await;
 }

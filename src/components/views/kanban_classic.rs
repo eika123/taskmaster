@@ -148,7 +148,7 @@ fn ClassicTaskCard(
     let assignees = task.assignees.clone();
 
     rsx! {
-        div { class: "task-card status-{task.status.as_str()} badge-variant-{badge_str}",
+        div { class: "task-card badge-variant-{badge_str}",
             div { class: "task-card-header",
                 Link {
                     to: Route::TaskPage { id: tid },

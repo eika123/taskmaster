@@ -17,7 +17,6 @@
 use crate::backend::app_endpoints::tests::test_helpers::run_as_user;
 use crate::backend::app_endpoints::*;
 use crate::backend::database::get_db;
-use crate::types::TaskStatus;
 
 /// Tests project leadership, clustered task discussion threads, and task state machine triggers.
 ///
@@ -58,9 +57,9 @@ async fn test_project_leadership_and_task_messages() {
         .await
         .unwrap();
 
-    // Step 2: Insert a task in 'accepted' status
+    // Step 2: Insert a task
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, 'accepted') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(proj_id)
     .bind("Clustered Key Task")
@@ -94,12 +93,20 @@ async fn test_project_leadership_and_task_messages() {
         assert_eq!(messages[1].msg, "Message 2");
 
         // Step 4: Test state machine triggers via update_task
-        // Invariant: transitioning to 'in_progress' with 0 assignees MUST fail at the trigger level
+        let in_progress_status_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM project_workflow_status WHERE project_id = $1 AND requires_assignee = TRUE LIMIT 1",
+        )
+        .bind(proj_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        // Invariant: transitioning to status requiring assignee with 0 assignees MUST fail at the trigger level
         let transition_without_assignees_result = update_task(
             task_id,
             "Clustered Key Task".to_string(),
             "Desc".to_string(),
-            TaskStatus::InProgress,
+            in_progress_status_id,
             vec![], // No assignees
         )
         .await;
@@ -108,20 +115,20 @@ async fn test_project_leadership_and_task_messages() {
             "State machine trigger should reject in_progress status without assignees"
         );
 
-        // Transitioning to 'in_progress' with assignees MUST succeed
+        // Transitioning to status requiring assignee with assignees MUST succeed
         let transition_with_assignees_result = update_task(
             task_id,
             "Clustered Key Task Updated".to_string(),
             "New Desc".to_string(),
-            TaskStatus::InProgress,
+            in_progress_status_id,
             vec![2], // Assigned to Bob
         )
         .await
         .unwrap();
 
         assert_eq!(
-            transition_with_assignees_result.status,
-            TaskStatus::InProgress
+            transition_with_assignees_result.workflow_status_id,
+            in_progress_status_id
         );
         assert_eq!(transition_with_assignees_result.assignees.len(), 1);
         assert_eq!(transition_with_assignees_result.assignees[0].id, 2);

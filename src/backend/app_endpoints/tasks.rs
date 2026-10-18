@@ -1,5 +1,6 @@
 use crate::types::{
-    BoardSnapshot, ProjectWorkflowTransitionDto, Task, TaskMessage, TaskStatus, WorkflowStatusDto,
+    BadgeVariant, BoardSnapshot, ProjectWorkflowTransitionDto, StatusCategory, Task, TaskMessage,
+    WorkflowStatusDto, WorkflowTemplate,
 };
 use dioxus::prelude::*;
 
@@ -23,8 +24,8 @@ pub(crate) struct RawTask {
     pub author: Option<i64>,
     pub author_name: Option<String>,
     pub description: Option<String>,
-    pub status: TaskStatus,
-    pub workflow_status_id: Option<i64>,
+    pub workflow_status_id: i64,
+    pub workflow_status_name: Option<String>,
     pub start_date: Option<DateTime<Utc>>,
     pub due_date: Option<DateTime<Utc>>,
     pub estimated_hours: Option<i32>,
@@ -66,14 +67,22 @@ pub async fn suggest_task_for_project(
         ));
     }
 
+    let initial_status_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND is_initial = TRUE LIMIT 1",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
     sqlx::query(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO task (project_id, title, description, author, workflow_status_id) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(project_id)
     .bind(task_title.trim())
     .bind(description.trim())
     .bind(user.id)
-    .bind(TaskStatus::Suggested)
+    .bind(initial_status_id)
     .execute(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to create suggested task: {e}")))?;
@@ -204,12 +213,14 @@ pub async fn get_my_tasks(after_id: Option<i64>, amount: u64) -> Result<Vec<Task
         "SELECT DISTINCT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
                 task.title, task.author,
                 COALESCE(u_author.name, 'Deleted User') AS author_name, 
-                task.description, task.status,
-                task.workflow_status_id, task.start_date, task.due_date,
+                task.description,
+                task.workflow_status_id, pws.name AS workflow_status_name,
+                task.start_date, task.due_date,
                 task.estimated_hours, task.progress_percent
          FROM task 
          LEFT JOIN project ON task.project_id = project.id
          LEFT JOIN \"user\" u_author ON task.author = u_author.id 
+         LEFT JOIN project_workflow_status pws ON task.workflow_status_id = pws.id
          LEFT JOIN assignments ON task.id = assignments.task_id
          WHERE (assignments.assigned_to = $1 OR task.author = $1)
            AND (
@@ -290,8 +301,8 @@ pub async fn get_my_tasks(after_id: Option<i64>, amount: u64) -> Result<Vec<Task
                     .author_name
                     .unwrap_or_else(|| "Deleted User".to_string()),
                 description: raw.description.unwrap_or_default(),
-                status: raw.status,
                 workflow_status_id: raw.workflow_status_id,
+                workflow_status_name: raw.workflow_status_name,
                 start_date: raw.start_date,
                 due_date: raw.due_date,
                 estimated_hours: raw.estimated_hours,
@@ -344,12 +355,14 @@ pub async fn get_project_tasks(
         "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
                 task.title, task.author,
                 COALESCE(u.name, 'Deleted User') AS author_name, 
-                task.description, task.status,
-                task.workflow_status_id, task.start_date, task.due_date,
+                task.description,
+                task.workflow_status_id, pws.name AS workflow_status_name,
+                task.start_date, task.due_date,
                 task.estimated_hours, task.progress_percent
          FROM task 
          LEFT JOIN project ON task.project_id = project.id
          LEFT JOIN \"user\" u ON task.author = u.id 
+         LEFT JOIN project_workflow_status pws ON task.workflow_status_id = pws.id
          WHERE task.project_id = $1 AND task.id > $2 
          ORDER BY task.id ASC 
          LIMIT $3",
@@ -416,8 +429,8 @@ pub async fn get_project_tasks(
                     .author_name
                     .unwrap_or_else(|| "Deleted User".to_string()),
                 description: raw.description.unwrap_or_default(),
-                status: raw.status,
                 workflow_status_id: raw.workflow_status_id,
+                workflow_status_name: raw.workflow_status_name,
                 start_date: raw.start_date,
                 due_date: raw.due_date,
                 estimated_hours: raw.estimated_hours,
@@ -439,12 +452,14 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
         "SELECT task.id, task.project_id, COALESCE(project.name, 'Standalone') AS project_name,
                 task.title, task.author,
                 COALESCE(u.name, 'Deleted User') AS author_name, 
-                task.description, task.status,
-                task.workflow_status_id, task.start_date, task.due_date,
+                task.description,
+                task.workflow_status_id, pws.name AS workflow_status_name,
+                task.start_date, task.due_date,
                 task.estimated_hours, task.progress_percent
          FROM task 
          LEFT JOIN project ON task.project_id = project.id
          LEFT JOIN \"user\" u ON task.author = u.id 
+         LEFT JOIN project_workflow_status pws ON task.workflow_status_id = pws.id
          WHERE task.id = $1",
     )
     .bind(task_id)
@@ -497,8 +512,8 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
             .author_name
             .unwrap_or_else(|| "Deleted User".to_string()),
         description: raw.description.unwrap_or_default(),
-        status: raw.status,
         workflow_status_id: raw.workflow_status_id,
+        workflow_status_name: raw.workflow_status_name,
         start_date: raw.start_date,
         due_date: raw.due_date,
         estimated_hours: raw.estimated_hours,
@@ -512,7 +527,7 @@ pub async fn update_task(
     task_id: i64,
     title: String,
     description: String,
-    status: TaskStatus,
+    workflow_status_id: i64,
     assignee_ids: Vec<i64>,
 ) -> Result<Task, ServerFnError> {
     let user = get_auth_user().await?;
@@ -597,17 +612,30 @@ pub async fn update_task(
         }
     }
 
-    if status == TaskStatus::Suggested && !assignee_ids.is_empty() {
-        return Err(ServerFnError::new(
-            "Cannot assign users to a task in 'suggested' status.",
-        ));
-    }
-    if status == TaskStatus::InProgress && assignee_ids.is_empty() {
-        return Err(ServerFnError::new(
-            "Cannot set status to 'in_progress' without at least one assignee.",
-        ));
+    // Check status semantic flags
+    let target_status: Option<(bool, bool)> = sqlx::query_as(
+        "SELECT allows_assignment, requires_assignee FROM project_workflow_status WHERE id = $1 AND project_id = $2",
+    )
+    .bind(workflow_status_id)
+    .bind(project_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    if let Some((allows_assignment, requires_assignee)) = target_status {
+        if !allows_assignment && !assignee_ids.is_empty() {
+            return Err(ServerFnError::new(
+                "Cannot assign users to a task in a status that disallows assignment.",
+            ));
+        }
+        if requires_assignee && assignee_ids.is_empty() {
+            return Err(ServerFnError::new(
+                "Cannot set status to one requiring an assignee without at least one assignee.",
+            ));
+        }
     }
 
+    // Update title and description first
     sqlx::query("UPDATE task SET title = $1, description = $2 WHERE id = $3")
         .bind(title.trim())
         .bind(description.trim())
@@ -616,38 +644,41 @@ pub async fn update_task(
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to update task details: {e}")))?;
 
-    let current_status: TaskStatus = sqlx::query_scalar("SELECT status FROM task WHERE id = $1")
-        .bind(task_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to fetch current status: {e}")))?;
+    let target_requires_assignee = target_status.map(|(_, req)| req).unwrap_or(false);
 
-    if current_status == TaskStatus::InProgress && status != TaskStatus::InProgress {
-        sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| ServerFnError::new(format!("Failed to stage status: {e}")))?;
-    }
-
-    for user_id in &assignee_ids {
-        sqlx::query(
-            "INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    if target_requires_assignee {
+        // Stage task to a status that allows assignments and does not require an assignee
+        let staging_status_id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM project_workflow_status
+             WHERE project_id = $1 AND allows_assignment = TRUE AND requires_assignee = FALSE
+             ORDER BY position ASC LIMIT 1",
         )
-        .bind(task_id)
-        .bind(*user_id)
-        .execute(&mut *tx)
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| ServerFnError::new(format!("Failed to add assignee: {e}")))?;
-    }
+        .unwrap_or(None);
 
-    if assignee_ids.is_empty() {
-        sqlx::query("DELETE FROM assignments WHERE task_id = $1")
+        if let Some(stage_id) = staging_status_id {
+            sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+                .bind(stage_id)
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to stage task status: {e}")))?;
+        }
+
+        // Insert new assignees
+        for user_id in &assignee_ids {
+            sqlx::query(
+                "INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
             .bind(task_id)
+            .bind(*user_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| ServerFnError::new(format!("Failed to clear assignments: {e}")))?;
-    } else {
+            .map_err(|e| ServerFnError::new(format!("Failed to add assignee: {e}")))?;
+        }
+
         let keep_ids = assignee_ids
             .iter()
             .map(|id| id.to_string())
@@ -662,14 +693,57 @@ pub async fn update_task(
             .execute(&mut *tx)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to remove old assignees: {e}")))?;
-    }
 
-    sqlx::query("UPDATE task SET status = $1 WHERE id = $2")
-        .bind(status)
-        .bind(task_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to update status: {e}")))?;
+        // Now set final status
+        sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+            .bind(workflow_status_id)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to set final workflow status: {e}")))?;
+    } else {
+        // Target does not require assignee, so update status first
+        sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+            .bind(workflow_status_id)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to update workflow status: {e}")))?;
+
+        for user_id in &assignee_ids {
+            sqlx::query(
+                "INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(task_id)
+            .bind(*user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to add assignee: {e}")))?;
+        }
+
+        if assignee_ids.is_empty() {
+            sqlx::query("DELETE FROM assignments WHERE task_id = $1")
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to clear assignments: {e}")))?;
+        } else {
+            let keep_ids = assignee_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let delete_sql = format!(
+                "DELETE FROM assignments WHERE task_id = $1 AND assigned_to NOT IN ({})",
+                keep_ids
+            );
+            sqlx::query(&delete_sql)
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to remove old assignees: {e}")))?;
+        }
+    }
 
     tx.commit()
         .await
@@ -719,7 +793,7 @@ pub async fn delete_task(task_id: i64) -> Result<(), ServerFnError> {
     } else {
         if author != Some(user.id) {
             return Err(ServerFnError::new(
-                "You do not have permission to delete this task.",
+                "You do not have permission to delete this standalone task.",
             ));
         }
     }
@@ -734,146 +808,8 @@ pub async fn delete_task(task_id: i64) -> Result<(), ServerFnError> {
 }
 
 #[server]
-pub async fn set_task_status(task_id: u64, status: TaskStatus) -> Result<(), ServerFnError> {
-    let user = get_auth_user().await?;
-    let pool = get_db().await;
-
-    let task_meta: Option<(i64, Option<i64>)> =
-        sqlx::query_as("SELECT project_id, author FROM task WHERE id = $1")
-            .bind(task_id as i64)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
-
-    let (project_id, author) = match task_meta {
-        Some(m) => m,
-        None => return Err(ServerFnError::new("Task not found.")),
-    };
-
-    if project_id != 0 {
-        let member_perm: Option<i64> = sqlx::query_scalar(
-            "SELECT CASE
-                WHEN p.leader_id = $1 THEN $3
-                ELSE pm.permissions_mask
-             END
-             FROM project p
-             LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
-             WHERE p.id = $2",
-        )
-        .bind(user.id)
-        .bind(project_id)
-        .bind(Permission::ADMIN_DEFAULT.as_i64())
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-        .flatten();
-
-        let effective_mask = match member_perm {
-            Some(mask) if has_perm(mask, Permission::EXECUTE) => mask,
-            _ => {
-                return Err(ServerFnError::new(
-                    "You do not have permission to update task status in this project.",
-                ));
-            }
-        };
-
-        // Transition guard check if project has role-gated transitions defined
-        let current_ws_id: Option<i64> =
-            sqlx::query_scalar("SELECT workflow_status_id FROM task WHERE id = $1")
-                .bind(task_id as i64)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-                .flatten();
-
-        let target_ws_id: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM project_workflow_status
-             WHERE project_id = $1
-               AND (
-                   LOWER(name) = LOWER($2)
-                   OR ($2 = 'in_progress' AND LOWER(name) IN ('inprogress', 'in_progress'))
-               )",
-        )
-        .bind(project_id)
-        .bind(status.as_str())
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-        .flatten();
-
-        let has_transitions: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM project_workflow_transition WHERE project_id = $1)",
-        )
-        .bind(project_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
-
-        if has_transitions {
-            if let (Some(from_id), Some(to_id)) = (current_ws_id, target_ws_id) {
-                if from_id != to_id {
-                    let required_perm: Option<i64> = sqlx::query_scalar(
-                        "SELECT required_permission FROM project_workflow_transition
-                         WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3",
-                    )
-                    .bind(project_id)
-                    .bind(from_id)
-                    .bind(to_id)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
-
-                    match required_perm {
-                        Some(req) => {
-                            if (effective_mask & req) == 0 {
-                                return Err(ServerFnError::new(
-                                    "You do not have permission to perform this workflow transition.",
-                                ));
-                            }
-                        }
-                        None => {
-                            return Err(ServerFnError::new(
-                                "This workflow transition is not permitted for this project.",
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        sqlx::query("UPDATE task SET status = $1, workflow_status_id = COALESCE($3, workflow_status_id) WHERE id = $2")
-            .bind(status)
-            .bind(task_id as i64)
-            .bind(target_ws_id)
-            .execute(pool)
-            .await
-            .map_err(|e| ServerFnError::new(format!("Failed to update task: {e}")))?;
-    } else {
-        if author != Some(user.id) {
-            let is_assigned: bool = sqlx::query_scalar(
-                "SELECT COUNT(*) > 0 FROM assignments WHERE task_id = $1 AND assigned_to = $2",
-            )
-            .bind(task_id as i64)
-            .bind(user.id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(false);
-
-            if !is_assigned {
-                return Err(ServerFnError::new(
-                    "You do not have permission to update this standalone task status.",
-                ));
-            }
-        }
-
-        sqlx::query("UPDATE task SET status = $1 WHERE id = $2")
-            .bind(status)
-            .bind(task_id as i64)
-            .execute(pool)
-            .await
-            .map_err(|e| ServerFnError::new(format!("Failed to update task: {e}")))?;
-    }
-
+pub async fn set_task_status(task_id: u64, new_workflow_status_id: i64) -> Result<(), ServerFnError> {
+    move_task_workflow_status(task_id as i64, new_workflow_status_id).await?;
     Ok(())
 }
 
@@ -1239,4 +1175,457 @@ pub async fn post_task_message(task_id: i64, msg: String) -> Result<TaskMessage,
     .map_err(|e| ServerFnError::new(format!("Failed to post message: {e}")))?;
 
     Ok(res)
+}
+
+#[server]
+pub async fn get_workflow_templates() -> Result<Vec<WorkflowTemplate>, ServerFnError> {
+    Ok(WorkflowTemplate::starter_templates())
+}
+
+#[server]
+pub async fn apply_workflow_template(
+    project_id: i64,
+    template_id: String,
+) -> Result<Vec<WorkflowStatusDto>, ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let can_manage: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .bind(Permission::MANAGE_WORKFLOW.as_i64())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_manage {
+        return Err(ServerFnError::new(
+            "You do not have permission to manage the workflow for this project.",
+        ));
+    }
+
+    let templates = WorkflowTemplate::starter_templates();
+    let tpl = match templates.into_iter().find(|t| {
+        t.id == template_id
+            || t.id.starts_with(&template_id)
+            || template_id.starts_with(&t.id)
+            || (template_id == "scrum" && t.id == "software_sprint")
+            || (template_id == "kanban" && t.id == "classic_kanban")
+            || (template_id == "guild_raid" && t.id == "guild_raid_prep")
+            || (template_id == "legacy" && t.id == "legacy_flow")
+    }) {
+        Some(t) => t,
+        None => return Err(ServerFnError::new("Template not found.")),
+    };
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
+
+    // Temporarily unset is_initial and rename existing statuses to avoid unique constraint collisions
+    sqlx::query(
+        "UPDATE project_workflow_status
+         SET is_initial = FALSE, name = '__old_' || id || '_' || name
+         WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to prep existing statuses: {e}")))?;
+
+    let mut new_initial_id: Option<i64> = None;
+    let mut new_status_ids: Vec<i64> = Vec::new();
+
+    for s in tpl.statuses {
+        let inserted_id: i64 = sqlx::query_scalar(
+            "INSERT INTO project_workflow_status (
+                project_id, name, category, badge_variant, position, wip_limit,
+                is_initial, allows_assignment, requires_assignee
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+        )
+        .bind(project_id)
+        .bind(&s.name)
+        .bind(s.category.as_str())
+        .bind(s.badge_variant.as_str())
+        .bind(s.position)
+        .bind(s.wip_limit)
+        .bind(s.is_initial)
+        .bind(s.allows_assignment)
+        .bind(s.requires_assignee)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to insert status: {e}")))?;
+
+        new_status_ids.push(inserted_id);
+        if s.is_initial {
+            new_initial_id = Some(inserted_id);
+        }
+    }
+
+    let initial_status_id = new_initial_id.unwrap_or_else(|| new_status_ids[0]);
+
+    sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE project_id = $2 AND workflow_status_id NOT IN (SELECT UNNEST($3::bigint[]))")
+        .bind(initial_status_id)
+        .bind(project_id)
+        .bind(&new_status_ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to remap tasks to new initial status: {e}")))?;
+
+    sqlx::query("DELETE FROM project_workflow_transition WHERE project_id = $1")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to clear transitions: {e}")))?;
+
+    sqlx::query("DELETE FROM project_workflow_status WHERE project_id = $1 AND id NOT IN (SELECT UNNEST($2::bigint[]))")
+        .bind(project_id)
+        .bind(&new_status_ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to delete old statuses: {e}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to commit template application: {e}")))?;
+
+    get_project_workflow_statuses(project_id).await
+}
+
+#[server]
+pub async fn create_workflow_status(
+    project_id: i64,
+    name: String,
+    category: StatusCategory,
+    badge_variant: BadgeVariant,
+    wip_limit: Option<i32>,
+    allows_assignment: bool,
+    requires_assignee: bool,
+) -> Result<WorkflowStatusDto, ServerFnError> {
+    let name_clean = name.trim();
+    if name_clean.is_empty() {
+        return Err(ServerFnError::new("Status name cannot be empty."));
+    }
+
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let can_manage: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .bind(Permission::MANAGE_WORKFLOW.as_i64())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_manage {
+        return Err(ServerFnError::new(
+            "You do not have permission to manage the workflow for this project.",
+        ));
+    }
+
+    let max_pos: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(position), 0) FROM project_workflow_status WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    let next_pos = max_pos + 1000;
+
+    let status = sqlx::query_as::<_, WorkflowStatusDto>(
+        "INSERT INTO project_workflow_status (
+            project_id, name, category, badge_variant, position, wip_limit,
+            is_initial, allows_assignment, requires_assignee
+        ) VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7, $8)
+        RETURNING id, project_id, name, category, badge_variant, position, wip_limit,
+                  is_initial, allows_assignment, requires_assignee,
+                  0::bigint AS task_count, FALSE AS wip_exceeded, created_at",
+    )
+    .bind(project_id)
+    .bind(name_clean)
+    .bind(category.as_str())
+    .bind(badge_variant.as_str())
+    .bind(next_pos)
+    .bind(wip_limit)
+    .bind(allows_assignment)
+    .bind(requires_assignee)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to create workflow status: {e}")))?;
+
+    Ok(status)
+}
+
+#[server]
+pub async fn update_workflow_status(
+    status_id: i64,
+    name: String,
+    category: StatusCategory,
+    badge_variant: BadgeVariant,
+    wip_limit: Option<i32>,
+    allows_assignment: bool,
+    requires_assignee: bool,
+) -> Result<WorkflowStatusDto, ServerFnError> {
+    let name_clean = name.trim();
+    if name_clean.is_empty() {
+        return Err(ServerFnError::new("Status name cannot be empty."));
+    }
+
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let project_id: i64 = match sqlx::query_scalar("SELECT project_id FROM project_workflow_status WHERE id = $1")
+        .bind(status_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    {
+        Some(pid) => pid,
+        None => return Err(ServerFnError::new("Status not found.")),
+    };
+
+    let can_manage: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .bind(Permission::MANAGE_WORKFLOW.as_i64())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_manage {
+        return Err(ServerFnError::new(
+            "You do not have permission to manage the workflow for this project.",
+        ));
+    }
+
+    let status = sqlx::query_as::<_, WorkflowStatusDto>(
+        "UPDATE project_workflow_status
+         SET name = $1, category = $2, badge_variant = $3, wip_limit = $4,
+             allows_assignment = $5, requires_assignee = $6
+         WHERE id = $7
+         RETURNING id, project_id, name, category, badge_variant, position, wip_limit,
+                   is_initial, allows_assignment, requires_assignee,
+                   (SELECT COUNT(*) FROM task WHERE workflow_status_id = $7)::bigint AS task_count,
+                   (wip_limit IS NOT NULL AND (SELECT COUNT(*) FROM task WHERE workflow_status_id = $7) > wip_limit) AS wip_exceeded,
+                   created_at",
+    )
+    .bind(name_clean)
+    .bind(category.as_str())
+    .bind(badge_variant.as_str())
+    .bind(wip_limit)
+    .bind(allows_assignment)
+    .bind(requires_assignee)
+    .bind(status_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to update workflow status: {e}")))?;
+
+    Ok(status)
+}
+
+#[server]
+pub async fn delete_workflow_status(
+    status_id: i64,
+    remap_to_status_id: Option<i64>,
+) -> Result<(), ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let row: Option<(i64, bool)> =
+        sqlx::query_as("SELECT project_id, is_initial FROM project_workflow_status WHERE id = $1")
+            .bind(status_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    let (project_id, is_initial) = match row {
+        Some(r) => r,
+        None => return Err(ServerFnError::new("Status not found.")),
+    };
+
+    let can_manage: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .bind(Permission::MANAGE_WORKFLOW.as_i64())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_manage {
+        return Err(ServerFnError::new(
+            "You do not have permission to manage the workflow for this project.",
+        ));
+    }
+
+    let status_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM project_workflow_status WHERE project_id = $1")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+    if status_count <= 1 {
+        return Err(ServerFnError::new(
+            "Cannot delete the only workflow status in a project.",
+        ));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
+
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE workflow_status_id = $1")
+        .bind(status_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(0);
+
+    if task_count > 0 {
+        let remap_id = match remap_to_status_id {
+            Some(rid) if rid != status_id => rid,
+            _ => {
+                return Err(ServerFnError::new(
+                    "Cannot delete status: tasks exist in this status and no valid remap target was provided.",
+                ));
+            }
+        };
+
+        let target_valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM project_workflow_status WHERE id = $1 AND project_id = $2)",
+        )
+        .bind(remap_id)
+        .bind(project_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(false);
+
+        if !target_valid {
+            return Err(ServerFnError::new(
+                "Remap target status does not belong to this project.",
+            ));
+        }
+
+        sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE workflow_status_id = $2")
+            .bind(remap_id)
+            .bind(status_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to remap tasks: {e}")))?;
+    }
+
+    sqlx::query("DELETE FROM project_workflow_status WHERE id = $1")
+        .bind(status_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to delete workflow status: {e}")))?;
+
+    if is_initial {
+        let new_initial_id: Option<i64> = match remap_to_status_id {
+            Some(rid) => Some(rid),
+            None => sqlx::query_scalar(
+                "SELECT id FROM project_workflow_status WHERE project_id = $1 ORDER BY position ASC LIMIT 1",
+            )
+            .bind(project_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?,
+        };
+
+        if let Some(nid) = new_initial_id {
+            sqlx::query("UPDATE project_workflow_status SET is_initial = TRUE WHERE id = $1")
+                .bind(nid)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to promote new initial status: {e}")))?;
+        }
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to commit status deletion: {e}")))?;
+
+    Ok(())
+}
+
+#[server]
+pub async fn reorder_workflow_statuses(
+    project_id: i64,
+    status_ids_in_order: Vec<i64>,
+) -> Result<Vec<WorkflowStatusDto>, ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let can_manage: bool = sqlx::query_scalar(
+        "SELECT (p.leader_id = $1 OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
+         ))
+         FROM project p WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .bind(Permission::MANAGE_WORKFLOW.as_i64())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+    .unwrap_or(false);
+
+    if !can_manage {
+        return Err(ServerFnError::new(
+            "You do not have permission to manage the workflow for this project.",
+        ));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
+
+    for (index, sid) in status_ids_in_order.iter().enumerate() {
+        let pos = ((index + 1) * 1000) as i64;
+        sqlx::query("UPDATE project_workflow_status SET position = $1 WHERE id = $2 AND project_id = $3")
+            .bind(pos)
+            .bind(*sid)
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to update position: {e}")))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to commit reordering: {e}")))?;
+
+    get_project_workflow_statuses(project_id).await
 }

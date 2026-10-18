@@ -32,7 +32,7 @@
 use crate::backend::app_endpoints::tests::test_helpers::run_as_user;
 use crate::backend::app_endpoints::*;
 use crate::backend::database::get_db;
-use crate::types::{Permission, TaskStatus};
+use crate::types::Permission;
 
 /// Verifies that users holding multiple organizational roles ("potato people" wearing multiple hats)
 /// receive the additive union (bitwise-OR) of all privileges across their active grants,
@@ -381,7 +381,7 @@ async fn test_privilege_ceiling_and_viewer_restrictions() {
 
     // 4. Verify viewer restriction: Diana cannot author tasks
     let diana_task = sqlx::query(
-        "INSERT INTO task (project_id, title, author, status) VALUES ($1, 'Auditor Task', 4, 'suggested')",
+        "INSERT INTO task (project_id, title, author) VALUES ($1, 'Auditor Task', 4)",
     )
     .bind(proj_id)
     .execute(pool)
@@ -606,7 +606,7 @@ async fn test_active_tasks_preflight_warning_and_handover() {
 
     // Create an active task assigned to Evan (5)
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, author, status) VALUES ($1, 'Build Auth Bridge', 1, 'assigned') RETURNING id",
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Build Auth Bridge', 1, (SELECT id FROM project_workflow_status WHERE project_id = $1 AND allows_assignment = TRUE LIMIT 1)) RETURNING id",
     )
     .bind(proj_id)
     .fetch_one(pool)
@@ -626,10 +626,11 @@ async fn test_active_tasks_preflight_warning_and_handover() {
          JOIN project p ON p.id = pmg.project_id
          JOIN assignments a ON a.assigned_to = 5
          JOIN task t ON t.id = a.task_id AND t.project_id = p.id
+         JOIN project_workflow_status pws ON t.workflow_status_id = pws.id
          WHERE pmg.source_org_id = $1
            AND pmg.source_org_role = 'engineering'
            AND pmg.user_id = 5
-           AND t.status != 'finished'
+           AND pws.category != 'done'
            AND NOT EXISTS (
                SELECT 1 FROM project_member_grants other
                JOIN project_role_definition prd ON prd.role = other.project_role
@@ -674,10 +675,11 @@ async fn test_active_tasks_preflight_warning_and_handover() {
          JOIN project p ON p.id = pmg.project_id
          JOIN assignments a ON a.assigned_to = 5
          JOIN task t ON t.id = a.task_id AND t.project_id = p.id
+         JOIN project_workflow_status pws ON t.workflow_status_id = pws.id
          WHERE pmg.source_org_id = $1
            AND pmg.source_org_role = 'engineering'
            AND pmg.user_id = 5
-           AND t.status != 'finished'
+           AND pws.category != 'done'
            AND NOT EXISTS (
                SELECT 1 FROM project_member_grants other
                JOIN project_role_definition prd ON prd.role = other.project_role
@@ -698,7 +700,16 @@ async fn test_active_tasks_preflight_warning_and_handover() {
     );
 
     // 3. In-progress task guardrail: Set task to in_progress
-    sqlx::query("UPDATE task SET status = 'in_progress' WHERE id = $1")
+    let in_prog_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND requires_assignee = TRUE LIMIT 1",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+        .bind(in_prog_id)
         .bind(task_id)
         .execute(pool)
         .await
@@ -769,9 +780,9 @@ async fn test_standalone_and_project_task_assignment_permissions() {
         .await
         .unwrap();
 
-    // Create a project task in 'accepted' status (tasks must be at least 'accepted' to be assigned!)
+    // Create a project task in assignable status
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, author, status) VALUES ($1, 'Assignment Test Task', 1, 'accepted') RETURNING id",
+        "INSERT INTO task (project_id, title, author, workflow_status_id) VALUES ($1, 'Assignment Test Task', 1, (SELECT id FROM project_workflow_status WHERE project_id = $1 AND allows_assignment = TRUE LIMIT 1)) RETURNING id",
     )
     .bind(proj_id)
     .fetch_one(pool)
@@ -893,7 +904,7 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
 
     // Create a task in the project
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, 'Initial Task', 'Details', 1, 'accepted') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author, workflow_status_id) VALUES ($1, 'Initial Task', 'Details', 1, (SELECT id FROM project_workflow_status WHERE project_id = $1 AND allows_assignment = TRUE LIMIT 1)) RETURNING id",
     )
     .bind(proj_id)
     .fetch_one(pool)
@@ -926,7 +937,7 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
         .unwrap();
 
     let bob_task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, 'Bob Authored Task', 'Desc', 2, 'accepted') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author) VALUES ($1, 'Bob Authored Task', 'Desc', 2) RETURNING id",
     )
     .bind(proj_id)
     .fetch_one(pool)
@@ -1005,6 +1016,22 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
         "Demoted Bob must be denied access to view project task"
     );
 
+    let accepted_status_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Accepted'",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let finished_status_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Finished'",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
     // Alice tries to assign demoted Bob to the task -> Must fail!
     let (assign_bob, update_assign_bob) = run_as_user(1, move || async move {
         let assign_bob = assign_task(task_id, 2).await;
@@ -1012,7 +1039,7 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
             task_id,
             "Title".to_string(),
             "Desc".to_string(),
-            TaskStatus::Accepted,
+            accepted_status_id,
             vec![2],
         )
         .await;
@@ -1059,12 +1086,12 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
                 task_id,
                 "Mutated Title".to_string(),
                 "Desc".to_string(),
-                TaskStatus::Accepted,
+                accepted_status_id,
                 vec![],
             )
             .await;
             // Charlie CANNOT change task status
-            let status = set_task_status(task_id as u64, TaskStatus::Finished).await;
+            let status = set_task_status(task_id as u64, finished_status_id).await;
             // Charlie CANNOT post messages
             let msg = post_task_message(task_id, "Viewer message".to_string()).await;
             (tasks, task, create, update, status, msg)
@@ -1168,7 +1195,7 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
             task_id,
             "Legitimate Member Edit".to_string(),
             "New Desc".to_string(),
-            TaskStatus::Accepted,
+            accepted_status_id,
             vec![],
         )
         .await
@@ -1262,7 +1289,7 @@ async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments()
 
     // Create a task and assign Bob
     let task_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, 'Feature Implementation', 'Code', 1, 'assigned') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author, workflow_status_id) VALUES ($1, 'Feature Implementation', 'Code', 1, (SELECT id FROM project_workflow_status WHERE project_id = $1 AND allows_assignment = TRUE LIMIT 1)) RETURNING id",
     )
     .bind(proj_id)
     .fetch_one(pool)

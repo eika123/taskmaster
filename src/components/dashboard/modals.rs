@@ -11,6 +11,7 @@ pub fn CreateProjectModal(
     let mut new_proj_name = use_signal(String::new);
     let mut new_proj_desc = use_signal(String::new);
     let mut new_proj_org_id = use_signal(|| Option::<i64>::None);
+    let mut new_proj_template = use_signal(|| "classic_kanban".to_string());
     let mut proj_form_error = use_signal(|| Option::<String>::None);
     let mut is_creating_proj = use_signal(|| false);
 
@@ -18,6 +19,7 @@ pub fn CreateProjectModal(
         let name = new_proj_name.read().trim().to_string();
         let desc = new_proj_desc.read().trim().to_string();
         let org_id = *new_proj_org_id.read();
+        let template = new_proj_template.read().clone();
 
         if name.is_empty() {
             proj_form_error.set(Some("Project name is required.".to_string()));
@@ -28,11 +30,12 @@ pub fn CreateProjectModal(
         proj_form_error.set(None);
 
         spawn(async move {
-            match create_project(name, desc, org_id).await {
+            match create_project(name, desc, org_id, Some(template)).await {
                 Ok(_) => {
                     new_proj_name.write().clear();
                     new_proj_desc.write().clear();
                     new_proj_org_id.set(None);
+                    new_proj_template.set("classic_kanban".to_string());
                     is_creating_proj.set(false);
                     on_created.call(());
                 }
@@ -53,10 +56,12 @@ pub fn CreateProjectModal(
             CreateProjectForm {
                 name: new_proj_name.read().clone(),
                 desc: new_proj_desc.read().clone(),
+                template: new_proj_template.read().clone(),
                 organizations,
                 is_creating: *is_creating_proj.read(),
                 on_name_change: move |val| new_proj_name.set(val),
                 on_desc_change: move |val| new_proj_desc.set(val),
+                on_template_change: move |val| new_proj_template.set(val),
                 on_org_change: move |val| new_proj_org_id.set(val),
                 on_cancel: move |_| on_close.call(()),
                 on_submit: handle_create,
@@ -70,10 +75,12 @@ pub fn CreateProjectModal(
 fn CreateProjectForm(
     name: String,
     desc: String,
+    template: String,
     organizations: Vec<Organization>,
     is_creating: bool,
     on_name_change: EventHandler<String>,
     on_desc_change: EventHandler<String>,
+    on_template_change: EventHandler<String>,
     on_org_change: EventHandler<Option<i64>>,
     on_cancel: EventHandler<()>,
     on_submit: EventHandler<()>,
@@ -96,6 +103,18 @@ fn CreateProjectForm(
                     placeholder: "What will this project accomplish?",
                     value: "{desc}",
                     oninput: move |e| on_desc_change.call(e.value()),
+                }
+            }
+            div {
+                label { class: "form-label", "Workflow Pipeline Template" }
+                select {
+                    class: "task-status-select",
+                    value: "{template}",
+                    onchange: move |e| on_template_change.call(e.value()),
+                    option { value: "classic_kanban", "Classic Kanban (Backlog, In Progress [WIP 5], Review [WIP 3], Done)" }
+                    option { value: "software_sprint", "Software Sprint (Triage, Backlog, Dev [WIP 4], QA [WIP 3], Deployed)" }
+                    option { value: "guild_raid_prep", "Guild Raid Prep (Signups, Roster, Consumables, Ready, Raid Complete)" }
+                    option { value: "legacy_flow", "Legacy Flow (Suggested, Accepted, Assigned, InProgress, Finished)" }
                 }
             }
             if !organizations.is_empty() {

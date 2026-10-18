@@ -1,37 +1,33 @@
-use crate::types::TaskStatus;
+use crate::types::WorkflowStatusDto;
 use dioxus::prelude::*;
 
 /// Bar allowing users to toggle column visibility and select all / clear selections.
 #[component]
 pub fn ColumnSelector(
-    selected_statuses: Vec<TaskStatus>,
-    on_toggle: EventHandler<TaskStatus>,
+    statuses: Vec<WorkflowStatusDto>,
+    selected_status_ids: Vec<i64>,
+    on_toggle: EventHandler<i64>,
     on_select_all: EventHandler<()>,
     on_clear: EventHandler<()>,
 ) -> Element {
-    let all_statuses = [
-        TaskStatus::Suggested,
-        TaskStatus::Accepted,
-        TaskStatus::Assigned,
-        TaskStatus::InProgress,
-        TaskStatus::Finished,
-    ];
-
     rsx! {
         div { class: "column-selector-bar",
             div { class: "column-selector-header",
                 span { class: "column-selector-title", "Columns:" }
             }
             div { class: "column-selector-pills",
-                for status in all_statuses {
+                for status in statuses {
                     {
-                        let is_selected = selected_statuses.contains(&status);
+                        let sid = status.id;
+                        let is_selected = selected_status_ids.contains(&sid);
+                        let name = status.name.clone();
                         rsx! {
                             ColumnStatusPill {
-                                key: "{status.as_str()}",
-                                status,
+                                key: "{sid}",
+                                status_id: sid,
+                                status_name: name,
                                 is_selected,
-                                on_toggle: move |s| on_toggle.call(s),
+                                on_toggle: move |id| on_toggle.call(id),
                             }
                         }
                     }
@@ -48,28 +44,21 @@ pub fn ColumnSelector(
 /// Pill toggle button for a single task column status.
 #[component]
 fn ColumnStatusPill(
-    status: TaskStatus,
+    status_id: i64,
+    status_name: String,
     is_selected: bool,
-    on_toggle: EventHandler<TaskStatus>,
+    on_toggle: EventHandler<i64>,
 ) -> Element {
-    let status_label = match status {
-        TaskStatus::Suggested => "Suggested",
-        TaskStatus::Accepted => "Accepted",
-        TaskStatus::Assigned => "Assigned",
-        TaskStatus::InProgress => "In Progress",
-        TaskStatus::Finished => "Finished",
-    };
-
     rsx! {
         button {
             r#type: "button",
             class: if is_selected { "column-pill pill-active" } else { "column-pill" },
             aria_pressed: "{is_selected}",
-            onclick: move |_| on_toggle.call(status),
+            onclick: move |_| on_toggle.call(status_id),
             span { class: "pill-indicator",
                 if is_selected { "✓ " } else { "+ " }
             }
-            "{status_label}"
+            "{status_name}"
         }
     }
 }

@@ -48,7 +48,7 @@ async fn test_project_task_association_and_deletion_cleanup() {
 
     // Step 2: Insert two tasks associated with this project
     let task1_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, 'suggested') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(proj_id)
     .bind("Task Alpha")
@@ -59,7 +59,7 @@ async fn test_project_task_association_and_deletion_cleanup() {
     .unwrap();
 
     let task2_id: i64 = sqlx::query_scalar(
-        "INSERT INTO task (project_id, title, description, author, status) VALUES ($1, $2, $3, $4, 'suggested') RETURNING id",
+        "INSERT INTO task (project_id, title, description, author) VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(proj_id)
     .bind("Task Beta")

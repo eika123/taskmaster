@@ -73,6 +73,7 @@ pub async fn create_project(
     name: String,
     description: String,
     owner_org_id: Option<i64>,
+    template_id: Option<String>,
 ) -> Result<Project, ServerFnError> {
     let user = get_auth_user().await?;
     let name_clean = name.trim();
@@ -104,6 +105,41 @@ pub async fn create_project(
         .execute(&mut *tx)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to register leader: {e}")))?;
+
+    // If a custom template is requested (other than legacy default), apply it
+    if let Some(tid) = template_id.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if tid != "legacy_flow" {
+            let templates = crate::types::WorkflowTemplate::starter_templates();
+            if let Some(tpl) = templates.into_iter().find(|t| t.id == tid) {
+                sqlx::query("DELETE FROM project_workflow_status WHERE project_id = $1")
+                    .bind(proj_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to reset default statuses: {e}")))?;
+
+                for s in tpl.statuses {
+                    sqlx::query(
+                        "INSERT INTO project_workflow_status (
+                            project_id, name, category, badge_variant, position, wip_limit,
+                            is_initial, allows_assignment, requires_assignee
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    )
+                    .bind(proj_id)
+                    .bind(s.name)
+                    .bind(s.category.as_str())
+                    .bind(s.badge_variant.as_str())
+                    .bind(s.position)
+                    .bind(s.wip_limit)
+                    .bind(s.is_initial)
+                    .bind(s.allows_assignment)
+                    .bind(s.requires_assignee)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to insert template status: {e}")))?;
+                }
+            }
+        }
+    }
 
     tx.commit()
         .await
@@ -519,18 +555,20 @@ pub async fn remove_organization_from_project(
         task_id: i64,
         task_title: String,
         status: String,
+        requires_assignee: bool,
         user_name: String,
     }
 
     let impacts: Vec<ImpactRow> = sqlx::query_as(
-        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, u.name AS user_name
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, pws.name AS status, pws.requires_assignee, u.name AS user_name
          FROM project_member_grants pmg
          JOIN \"user\" u ON pmg.user_id = u.id
          JOIN assignments a ON a.assigned_to = u.id
          JOIN task t ON t.id = a.task_id AND t.project_id = $1
+         JOIN project_workflow_status pws ON t.workflow_status_id = pws.id
          WHERE pmg.project_id = $1
            AND pmg.source_org_id = $2
-           AND t.status != 'finished'
+           AND pws.category != 'done'
            AND NOT EXISTS (
                SELECT 1 FROM project_member_grants other
                JOIN project_role_definition prd ON prd.role = other.project_role
@@ -563,9 +601,9 @@ pub async fn remove_organization_from_project(
         .await
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
-    // If confirmed, unassign non-in_progress tasks
+    // If confirmed, unassign tasks that do not require an assignee
     for imp in &impacts {
-        if imp.status != "in_progress" {
+        if !imp.requires_assignee {
             sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = (SELECT id FROM \"user\" WHERE name = $2)")
                 .bind(imp.task_id)
                 .bind(&imp.user_name)
@@ -696,20 +734,22 @@ pub async fn revoke_org_role_project_access(
         task_id: i64,
         task_title: String,
         status: String,
+        requires_assignee: bool,
         user_id: i64,
         user_name: String,
     }
 
     let impacts: Vec<ImpactRow> = sqlx::query_as(
-        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, u.id AS user_id, u.name AS user_name
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, pws.name AS status, pws.requires_assignee, u.id AS user_id, u.name AS user_name
          FROM project_member_grants pmg
          JOIN \"user\" u ON pmg.user_id = u.id
          JOIN assignments a ON a.assigned_to = u.id
          JOIN task t ON t.id = a.task_id AND t.project_id = $1
+         JOIN project_workflow_status pws ON t.workflow_status_id = pws.id
          WHERE pmg.project_id = $1
            AND pmg.source_org_id = $2
            AND pmg.source_org_role = $3
-           AND t.status != 'finished'
+           AND pws.category != 'done'
            AND NOT EXISTS (
                SELECT 1 FROM project_member_grants other
                JOIN project_role_definition prd ON prd.role = other.project_role
@@ -744,7 +784,7 @@ pub async fn revoke_org_role_project_access(
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
     for imp in &impacts {
-        if imp.status == "in_progress" {
+        if imp.requires_assignee {
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
                     .bind(imp.task_id)
@@ -752,11 +792,24 @@ pub async fn revoke_org_role_project_access(
                     .await
                     .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
             if count <= 1 {
-                sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
-                    .bind(imp.task_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+                let fallback_id: Option<i64> = sqlx::query_scalar(
+                    "SELECT id FROM project_workflow_status
+                     WHERE project_id = $1 AND requires_assignee = FALSE AND allows_assignment = TRUE
+                     ORDER BY position ASC LIMIT 1",
+                )
+                .bind(project_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to find fallback status: {e}")))?;
+
+                if let Some(fid) = fallback_id {
+                    sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+                        .bind(fid)
+                        .bind(imp.task_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+                }
             }
         }
         sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")

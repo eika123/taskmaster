@@ -74,7 +74,12 @@ fn TaskTableRow(
     let status_name = current_status
         .as_ref()
         .map(|s| s.name.clone())
-        .unwrap_or_else(|| task.status.to_string());
+        .or_else(|| task.workflow_status_name.clone())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let cat_str = current_status
+        .as_ref()
+        .map(|s| s.category.as_str())
+        .unwrap_or("todo");
 
     rsx! {
         tr {
@@ -96,7 +101,7 @@ fn TaskTableRow(
                 }
             }
             td { class: "task-category-cell",
-                span { class: "category-tag", "{task.status.as_str()}" }
+                span { class: "category-tag", "{cat_str}" }
             }
             td { class: "task-assignees-cell",
                 if assignees.is_empty() {

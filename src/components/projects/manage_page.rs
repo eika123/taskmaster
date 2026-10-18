@@ -4,7 +4,7 @@ use crate::backend::app_endpoints::{
 };
 use crate::components::dashboard::ConfirmDeleteModal;
 use crate::components::organizations::modals::ConfirmActiveTasksWarningModal;
-use crate::components::projects::InviteProjectMemberModal;
+use crate::components::projects::{InviteProjectMemberModal, ProjectWorkflowColumnsSection};
 use crate::types::{Organization, Project, ProjectMember, ProjectOrganization};
 use crate::Route;
 use dioxus::prelude::*;
@@ -159,6 +159,11 @@ pub fn ProjectManagePage(project_id: i64) -> Element {
                     on_refresh: move |_| handle_refresh(),
                     on_remove: move |oid| handle_remove_org(oid),
                     on_affiliate: handle_affiliate_new,
+                }
+
+                ProjectWorkflowColumnsSection {
+                    project_id,
+                    is_leader,
                 }
 
                 ProjectMembersLedgerSection {

@@ -1,10 +1,10 @@
 use crate::backend::app_endpoints::{
-    get_my_project_member, get_project_assignable_users, get_task, get_task_messages,
-    post_task_message, update_task,
+    get_my_project_member, get_project_assignable_users, get_project_workflow_statuses, get_task,
+    get_task_messages, post_task_message, update_task,
 };
 use crate::components::assignee_search::{AssigneeBadgeList, AssigneeSearchDropdown};
 use crate::components::status_select::TaskStatusSelect;
-use crate::types::{has_perm, Permission, Task, TaskStatus, User};
+use crate::types::{has_perm, Permission, Task, User, WorkflowStatusDto};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -25,6 +25,13 @@ pub fn TaskPage(id: i64) -> Element {
 
     let users_resource =
         use_server_future(move || async move { get_project_assignable_users(pid).await })?;
+
+    let workflow_statuses_resource = use_server_future(move || async move {
+        match pid {
+            Some(p) => get_project_workflow_statuses(p).await.unwrap_or_default(),
+            None => Vec::new(),
+        }
+    })?;
 
     let my_membership_resource = use_server_future(move || async move {
         match pid {
@@ -59,7 +66,7 @@ pub fn TaskPage(id: i64) -> Element {
     let mut is_editing = use_signal(|| false);
     let mut edit_title = use_signal(String::new);
     let mut edit_desc = use_signal(String::new);
-    let mut edit_status = use_signal(|| TaskStatus::Suggested);
+    let mut edit_status = use_signal(|| 0i64);
     let mut edit_assignees = use_signal(Vec::<User>::new);
     let mut save_error = use_signal(|| Option::<String>::None);
     let mut is_saving = use_signal(|| false);
@@ -67,6 +74,10 @@ pub fn TaskPage(id: i64) -> Element {
     let mut new_message_text = use_signal(String::new);
     let mut is_posting_message = use_signal(|| false);
     let mut message_error = use_signal(|| Option::<String>::None);
+    let available_statuses = match &*workflow_statuses_resource.read() {
+        Some(s) => s.clone(),
+        None => Vec::new(),
+    };
 
     let all_users = match &*users_resource.read() {
         Some(Ok(users)) => users.clone(),
@@ -81,7 +92,7 @@ pub fn TaskPage(id: i64) -> Element {
     let mut start_editing = move |task: &Task| {
         edit_title.set(task.title.clone());
         edit_desc.set(task.description.clone());
-        edit_status.set(task.status);
+        edit_status.set(task.workflow_status_id);
         edit_assignees.set(task.assignees.clone());
         save_error.set(None);
         is_editing.set(true);
@@ -173,6 +184,7 @@ pub fn TaskPage(id: i64) -> Element {
                     if *is_editing.read() {
                         TaskEditForm {
                             edit_status: *edit_status.read(),
+                            available_statuses: available_statuses.clone(),
                             edit_desc: edit_desc.read().clone(),
                             edit_assignees: edit_assignees.read().clone(),
                             task_title: edit_title.read().clone(),
@@ -248,6 +260,11 @@ fn TaskDetailHeader(
     on_save: EventHandler<()>,
     on_cancel: EventHandler<()>,
 ) -> Element {
+    let status_name = task
+        .workflow_status_name
+        .clone()
+        .unwrap_or_else(|| "Status".to_string());
+
     rsx! {
         div { class: "task-detail-header",
             if is_editing {
@@ -296,7 +313,7 @@ fn TaskDetailHeader(
                         "Cancel"
                     }
                 } else {
-                    span { class: "task-detail-status status-{task.status.as_str()}", "{task.status}" }
+                    span { class: "task-detail-status", "{status_name}" }
                     if can_edit {
                         button {
                             r#type: "button",
@@ -314,12 +331,13 @@ fn TaskDetailHeader(
 /// Editable sections of task details: status, description, and assignees.
 #[component]
 fn TaskEditForm(
-    edit_status: TaskStatus,
+    edit_status: i64,
+    available_statuses: Vec<WorkflowStatusDto>,
     edit_desc: String,
     edit_assignees: Vec<User>,
     task_title: String,
     all_users: Vec<User>,
-    on_status_change: EventHandler<TaskStatus>,
+    on_status_change: EventHandler<i64>,
     on_desc_change: EventHandler<String>,
     on_assign: EventHandler<i64>,
     on_unassign: EventHandler<i64>,
@@ -328,7 +346,8 @@ fn TaskEditForm(
         div { class: "task-detail-section",
             label { class: "section-title", "Status" }
             TaskStatusSelect {
-                status: edit_status,
+                current_status_id: edit_status,
+                available_statuses,
                 can_mutate: true,
                 on_change: move |new_st| on_status_change.call(new_st),
             }

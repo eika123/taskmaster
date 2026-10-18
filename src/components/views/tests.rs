@@ -1,7 +1,6 @@
 use super::host::ProjectViewHost;
 use crate::types::{
-    BadgeVariant, BoardSnapshot, ProjectViewKind, StatusCategory, Task, TaskStatus, User,
-    WorkflowStatusDto,
+    BadgeVariant, BoardSnapshot, ProjectViewKind, StatusCategory, Task, User, WorkflowStatusDto,
 };
 use chrono::Utc;
 use dioxus::prelude::*;
@@ -72,8 +71,7 @@ fn create_sample_status(
 fn create_sample_task(
     id: i64,
     title: &str,
-    status: TaskStatus,
-    ws_id: Option<i64>,
+    ws_id: i64,
     assignees: Vec<User>,
 ) -> Task {
     Task {
@@ -84,8 +82,8 @@ fn create_sample_task(
         author: Some(1),
         author_name: "Lead Dev".to_string(),
         description: "Task description for testing".to_string(),
-        status,
         workflow_status_id: ws_id,
+        workflow_status_name: None,
         start_date: Some(Utc::now()),
         due_date: Some(Utc::now()),
         estimated_hours: Some(8),
@@ -150,9 +148,9 @@ fn fixture_single_status() -> BoardSnapshot {
     )
     .with_task_count(3)];
     let tasks = vec![
-        create_sample_task(101, "Setup CI", TaskStatus::Suggested, Some(10), vec![]),
-        create_sample_task(102, "Dockerize", TaskStatus::Suggested, Some(10), vec![]),
-        create_sample_task(103, "Docs", TaskStatus::Suggested, Some(10), vec![]),
+        create_sample_task(101, "Setup CI", 10, vec![]),
+        create_sample_task(102, "Dockerize", 10, vec![]),
+        create_sample_task(103, "Docs", 10, vec![]),
     ];
     BoardSnapshot {
         project_id: 2,
@@ -218,8 +216,7 @@ fn fixture_ten_custom_statuses() -> BoardSnapshot {
             create_sample_task(
                 *id * 10,
                 &format!("Task for {name}"),
-                TaskStatus::Accepted,
-                Some(*id),
+                *id,
                 vec![],
             )
         })
@@ -250,10 +247,10 @@ fn fixture_wip_limit_exceeded() -> BoardSnapshot {
     .with_task_count(4); // 4 tasks > limit 2 => wip_exceeded = true
 
     let tasks = vec![
-        create_sample_task(201, "Task A", TaskStatus::InProgress, Some(20), vec![]),
-        create_sample_task(202, "Task B", TaskStatus::InProgress, Some(20), vec![]),
-        create_sample_task(203, "Task C", TaskStatus::InProgress, Some(20), vec![]),
-        create_sample_task(204, "Task D", TaskStatus::InProgress, Some(20), vec![]),
+        create_sample_task(201, "Task A", 20, vec![]),
+        create_sample_task(202, "Task B", 20, vec![]),
+        create_sample_task(203, "Task C", 20, vec![]),
+        create_sample_task(204, "Task D", 20, vec![]),
     ];
 
     BoardSnapshot {
@@ -323,8 +320,7 @@ fn fixture_scale_250_tasks() -> BoardSnapshot {
         tasks.push(create_sample_task(
             i as i64,
             &format!("Scale Task #{i}"),
-            TaskStatus::InProgress,
-            Some(ws_id),
+            ws_id,
             assignees,
         ));
     }
@@ -366,29 +362,25 @@ fn fixture_unicode_markdown() -> BoardSnapshot {
         create_sample_task(
             501,
             "🎯 Target: Release v1.0.0-rc.1",
-            TaskStatus::Suggested,
-            Some(1),
+            1,
             vec![],
         ),
         create_sample_task(
             502,
             "**Crucial**: SQL & XSS escape test <script>",
-            TaskStatus::Suggested,
-            Some(1),
+            1,
             vec![],
         ),
         create_sample_task(
             503,
             "日本語タスク: データベース接続確認",
-            TaskStatus::Accepted,
-            Some(1),
+            1,
             vec![],
         ),
         create_sample_task(
             504,
             "Norwegian: Smørrebrød & Blåbærsyltetøy ÆØÅ",
-            TaskStatus::Finished,
-            Some(2),
+            2,
             vec![],
         ),
     ];

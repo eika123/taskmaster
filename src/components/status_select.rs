@@ -1,37 +1,38 @@
-use crate::types::TaskStatus;
+use crate::types::WorkflowStatusDto;
 use dioxus::prelude::*;
 
+/// Dynamic status dropdown populated with the project's configured workflow statuses.
 #[component]
 pub fn TaskStatusSelect(
-    status: TaskStatus,
+    current_status_id: i64,
+    available_statuses: Vec<WorkflowStatusDto>,
     aria_label: Option<String>,
     can_mutate: bool,
-    on_change: EventHandler<TaskStatus>,
+    on_change: EventHandler<i64>,
 ) -> Element {
     let label = aria_label.unwrap_or_else(|| "Change task status".to_string());
 
     rsx! {
         select {
             class: "task-status-select",
-            value: "{status.as_str()}",
+            value: "{current_status_id}",
             aria_label: "{label}",
             disabled: !can_mutate,
             onchange: move |evt| {
                 if can_mutate {
-                    if let Ok(new_status) = evt.value().parse::<TaskStatus>() {
-                        on_change.call(new_status);
+                    if let Ok(new_id) = evt.value().parse::<i64>() {
+                        on_change.call(new_id);
                     }
                 }
             },
-            option { value: "suggested", selected: status == TaskStatus::Suggested, "Suggested" }
-            option { value: "accepted", selected: status == TaskStatus::Accepted, "Accepted" }
-            option { value: "assigned", selected: status == TaskStatus::Assigned, "Assigned" }
-            option {
-                value: "in_progress",
-                selected: status == TaskStatus::InProgress,
-                "In Progress"
+            for s in available_statuses {
+                option {
+                    key: "{s.id}",
+                    value: "{s.id}",
+                    selected: s.id == current_status_id,
+                    "{s.name}"
+                }
             }
-            option { value: "finished", selected: status == TaskStatus::Finished, "Finished" }
         }
     }
 }

@@ -1,98 +1,254 @@
-/// Canonical task execution status within the legacy 5-state Kanban lifecycle.
-///
-/// During Milestone M1 (Expand Phase), `TaskStatus` is dual-written alongside
-/// `project_workflow_status.id` to guarantee zero-downtime backward compatibility
-/// across existing Kanban boards and client RPC contracts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    /// Newly proposed task awaiting review or triage (`allows_assignment = false`).
-    Suggested,
-    /// Accepted task ready to be scheduled or assigned.
-    Accepted,
-    /// Task assigned to one or more contributors.
-    Assigned,
-    /// Active work in progress (`requires_assignee = true`).
-    InProgress,
-    /// Terminal state denoting successful completion.
-    Finished,
+use chrono::{DateTime, Utc};
+
+/// Specification of a single column within a workflow starter template.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorkflowStatusTemplate {
+    pub name: String,
+    pub category: StatusCategory,
+    pub badge_variant: BadgeVariant,
+    pub position: i64,
+    pub wip_limit: Option<i32>,
+    pub is_initial: bool,
+    pub allows_assignment: bool,
+    pub requires_assignee: bool,
 }
 
-// ============================================================================
-// SQLx Database Mapping: TaskStatus <-> PostgreSQL TEXT
-// ============================================================================
-
-#[cfg(feature = "server")]
-/// Declares SQL type metadata for [`TaskStatus`], mapping it to PostgreSQL `TEXT`/`VARCHAR`.
-impl sqlx::Type<sqlx::Postgres> for TaskStatus {
-    /// Returns the database type metadata for PostgreSQL, matching standard `TEXT`.
-    fn type_info() -> sqlx::postgres::PgTypeInfo {
-        <String as sqlx::Type<sqlx::Postgres>>::type_info()
-    }
-
-    /// Verifies whether a PostgreSQL column type is compatible with this enum's text representation.
-    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
-    }
+/// A named workflow pipeline template that can be instantiated into a project.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorkflowTemplate {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub statuses: Vec<WorkflowStatusTemplate>,
 }
 
-#[cfg(feature = "server")]
-/// Encodes [`TaskStatus`] into the PostgreSQL wire format by serializing its snake_case string representation.
-impl<'q> sqlx::Encode<'q, sqlx::Postgres> for TaskStatus {
-    /// Encodes the enum variant as a string slice into the PostgreSQL argument buffer.
-    fn encode_by_ref(
-        &self,
-        buf: &mut sqlx::postgres::PgArgumentBuffer,
-    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
-        <&str as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&self.as_str(), buf)
-    }
-}
-
-#[cfg(feature = "server")]
-/// Decodes a [`TaskStatus`] from a PostgreSQL text column or query result.
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for TaskStatus {
-    /// Parses a database string value into the matching [`TaskStatus`] variant, returning an error for unknown strings.
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let s = <&str as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
-        s.parse::<Self>().map_err(Into::into)
-    }
-}
-
-impl TaskStatus {
-    /// Returns the canonical snake_case string literal matching the PostgreSQL `task.status` column check constraint.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Suggested => "suggested",
-            Self::Accepted => "accepted",
-            Self::Assigned => "assigned",
-            Self::InProgress => "in_progress",
-            Self::Finished => "finished",
-        }
-    }
-}
-
-impl std::fmt::Display for TaskStatus {
-    /// Writes the canonical snake_case string to the formatter.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for TaskStatus {
-    type Err = String;
-
-    /// Attempts to parse standard snake_case status names (`suggested`, `accepted`, `assigned`, `in_progress`, `finished`).
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "suggested" => Ok(Self::Suggested),
-            "accepted" => Ok(Self::Accepted),
-            "assigned" => Ok(Self::Assigned),
-            "in_progress" => Ok(Self::InProgress),
-            "finished" => Ok(Self::Finished),
-            other => Err(format!("Unknown task status: '{other}'")),
-        }
+impl WorkflowTemplate {
+    /// Returns the standard built-in starter templates:
+    /// - Classic Kanban (Backlog, In Progress [WIP 5], Review [WIP 3], Done)
+    /// - Guild Raid Prep (Signups, Roster Assigned, Consumables & Gear, Ready for Raid, Raid Complete)
+    /// - Software Sprint (Triage, Sprint Backlog, Development [WIP 4], QA & Review [WIP 3], Deployed)
+    /// - Legacy Flow (Suggested, Accepted, Assigned, InProgress, Finished)
+    pub fn starter_templates() -> Vec<Self> {
+        vec![
+            Self {
+                id: "classic_kanban".to_string(),
+                name: "Classic Kanban".to_string(),
+                description: "Standard agile board with Backlog, WIP-limited In Progress and Review, and Done.".to_string(),
+                statuses: vec![
+                    WorkflowStatusTemplate {
+                        name: "Backlog".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Default,
+                        position: 1000,
+                        wip_limit: None,
+                        is_initial: true,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "In Progress".to_string(),
+                        category: StatusCategory::InProgress,
+                        badge_variant: BadgeVariant::Warning,
+                        position: 2000,
+                        wip_limit: Some(5),
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Review".to_string(),
+                        category: StatusCategory::Review,
+                        badge_variant: BadgeVariant::Purple,
+                        position: 3000,
+                        wip_limit: Some(3),
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Done".to_string(),
+                        category: StatusCategory::Done,
+                        badge_variant: BadgeVariant::Success,
+                        position: 4000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                ],
+            },
+            Self {
+                id: "guild_raid_prep".to_string(),
+                name: "Guild Raid Prep".to_string(),
+                description: "Gaming guild event pipeline: Signups, Roster Assignment, Consumables Prep, and Raid Completion.".to_string(),
+                statuses: vec![
+                    WorkflowStatusTemplate {
+                        name: "Signups".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Default,
+                        position: 1000,
+                        wip_limit: None,
+                        is_initial: true,
+                        allows_assignment: false,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Roster Assigned".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Info,
+                        position: 2000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Consumables & Gear".to_string(),
+                        category: StatusCategory::InProgress,
+                        badge_variant: BadgeVariant::Warning,
+                        position: 3000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Ready for Raid".to_string(),
+                        category: StatusCategory::Review,
+                        badge_variant: BadgeVariant::Purple,
+                        position: 4000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Raid Complete".to_string(),
+                        category: StatusCategory::Done,
+                        badge_variant: BadgeVariant::Success,
+                        position: 5000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                ],
+            },
+            Self {
+                id: "software_sprint".to_string(),
+                name: "Software Sprint".to_string(),
+                description: "Engineering team pipeline with Triage, Sprint Backlog, Development, Code Review/QA, and Deployed.".to_string(),
+                statuses: vec![
+                    WorkflowStatusTemplate {
+                        name: "Triage".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Default,
+                        position: 1000,
+                        wip_limit: None,
+                        is_initial: true,
+                        allows_assignment: false,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Sprint Backlog".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Info,
+                        position: 2000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Development".to_string(),
+                        category: StatusCategory::InProgress,
+                        badge_variant: BadgeVariant::Warning,
+                        position: 3000,
+                        wip_limit: Some(4),
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "QA & Review".to_string(),
+                        category: StatusCategory::Review,
+                        badge_variant: BadgeVariant::Purple,
+                        position: 4000,
+                        wip_limit: Some(3),
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Deployed".to_string(),
+                        category: StatusCategory::Done,
+                        badge_variant: BadgeVariant::Success,
+                        position: 5000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                ],
+            },
+            Self {
+                id: "legacy_flow".to_string(),
+                name: "Legacy Flow".to_string(),
+                description: "Backward-compatible 5-state lifecycle: Suggested, Accepted, Assigned, InProgress, Finished.".to_string(),
+                statuses: vec![
+                    WorkflowStatusTemplate {
+                        name: "Suggested".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Default,
+                        position: 1000,
+                        wip_limit: None,
+                        is_initial: true,
+                        allows_assignment: false,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Accepted".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Info,
+                        position: 2000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Assigned".to_string(),
+                        category: StatusCategory::Todo,
+                        badge_variant: BadgeVariant::Purple,
+                        position: 3000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "InProgress".to_string(),
+                        category: StatusCategory::InProgress,
+                        badge_variant: BadgeVariant::Warning,
+                        position: 4000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: true,
+                    },
+                    WorkflowStatusTemplate {
+                        name: "Finished".to_string(),
+                        category: StatusCategory::Done,
+                        badge_variant: BadgeVariant::Success,
+                        position: 5000,
+                        wip_limit: None,
+                        is_initial: false,
+                        allows_assignment: true,
+                        requires_assignee: false,
+                    },
+                ],
+            },
+        ]
     }
 }
 
@@ -113,8 +269,6 @@ impl Default for User {
         }
     }
 }
-
-use chrono::{DateTime, Utc};
 
 /// High-level workflow category grouping custom project statuses for cross-project dashboards.
 ///
@@ -466,17 +620,9 @@ impl BoardSnapshot {
         self.statuses.iter().find(|s| s.id == id)
     }
 
-    /// Resolves the effective status for a task, falling back to initial status if unassigned.
+    /// Resolves the effective status for a task, falling back to initial status.
     pub fn status_for_task<'a>(&'a self, task: &Task) -> Option<&'a WorkflowStatusDto> {
-        if let Some(ws_id) = task.workflow_status_id {
-            if let Some(s) = self.find_status(ws_id) {
-                return Some(s);
-            }
-        }
-        // Fallback: match by name or initial status
-        self.statuses
-            .iter()
-            .find(|s| s.name.eq_ignore_ascii_case(task.status.as_str()))
+        self.find_status(task.workflow_status_id)
             .or_else(|| self.statuses.iter().find(|s| s.is_initial))
             .or_else(|| self.statuses.first())
     }
@@ -499,9 +645,9 @@ pub struct Task {
     pub author: Option<i64>,
     pub author_name: String,
     pub description: String,
-    pub status: TaskStatus,
+    pub workflow_status_id: i64,
     #[serde(default)]
-    pub workflow_status_id: Option<i64>,
+    pub workflow_status_name: Option<String>,
     #[serde(default)]
     pub start_date: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -736,7 +882,7 @@ pub struct ActiveTaskImpact {
     pub project_name: String,
     pub task_id: i64,
     pub task_title: String,
-    pub task_status: TaskStatus,
+    pub task_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

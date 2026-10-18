@@ -216,19 +216,22 @@ pub async fn remove_organization_member(
         task_id: i64,
         task_title: String,
         status: String,
+        requires_assignee: bool,
+        project_id: i64,
         project_name: String,
     }
 
     // Check if removing this member from the org will strip task permissions on active project tasks
     let impacts: Vec<ImpactRow> = sqlx::query_as(
-        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, p.name AS project_name
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, pws.name AS status, pws.requires_assignee, p.id AS project_id, p.name AS project_name
          FROM project_member_grants pmg
          JOIN project p ON p.id = pmg.project_id
          JOIN assignments a ON a.assigned_to = $1
          JOIN task t ON t.id = a.task_id AND t.project_id = p.id
+         JOIN project_workflow_status pws ON t.workflow_status_id = pws.id
          WHERE pmg.source_org_id = $2
            AND pmg.user_id = $1
-           AND t.status != 'finished'
+           AND pws.category != 'done'
            AND NOT EXISTS (
                SELECT 1 FROM project_member_grants other
                JOIN project_role_definition prd ON prd.role = other.project_role
@@ -268,7 +271,7 @@ pub async fn remove_organization_member(
 
     // If confirmed, unassign from affected non-finished tasks so DB constraints don't fail
     for impact in &impacts {
-        if impact.status == "in_progress" {
+        if impact.requires_assignee {
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
                     .bind(impact.task_id)
@@ -276,11 +279,24 @@ pub async fn remove_organization_member(
                     .await
                     .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
             if count <= 1 {
-                sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
-                    .bind(impact.task_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+                let fallback_id: Option<i64> = sqlx::query_scalar(
+                    "SELECT id FROM project_workflow_status
+                     WHERE project_id = $1 AND requires_assignee = FALSE AND allows_assignment = TRUE
+                     ORDER BY position ASC LIMIT 1",
+                )
+                .bind(impact.project_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to find fallback status: {e}")))?;
+
+                if let Some(fid) = fallback_id {
+                    sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+                        .bind(fid)
+                        .bind(impact.task_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+                }
             }
         }
         sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")
@@ -546,19 +562,22 @@ pub async fn revoke_organization_member_role(
         task_id: i64,
         task_title: String,
         status: String,
+        requires_assignee: bool,
+        project_id: i64,
         project_name: String,
     }
 
     let impacts: Vec<ImpactRow> = sqlx::query_as(
-        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, t.status, p.name AS project_name
+        "SELECT DISTINCT t.id AS task_id, t.title AS task_title, pws.name AS status, pws.requires_assignee, p.id AS project_id, p.name AS project_name
          FROM project_member_grants pmg
          JOIN project p ON p.id = pmg.project_id
          JOIN assignments a ON a.assigned_to = $1
          JOIN task t ON t.id = a.task_id AND t.project_id = p.id
+         JOIN project_workflow_status pws ON t.workflow_status_id = pws.id
          WHERE pmg.source_org_id = $2
            AND pmg.source_org_role = $3
            AND pmg.user_id = $1
-           AND t.status != 'finished'
+           AND pws.category != 'done'
            AND NOT EXISTS (
                SELECT 1 FROM project_member_grants other
                JOIN project_role_definition prd ON prd.role = other.project_role
@@ -598,7 +617,7 @@ pub async fn revoke_organization_member_role(
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
     for imp in &impacts {
-        if imp.status == "in_progress" {
+        if imp.requires_assignee {
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
                     .bind(imp.task_id)
@@ -606,11 +625,24 @@ pub async fn revoke_organization_member_role(
                     .await
                     .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
             if count <= 1 {
-                sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
-                    .bind(imp.task_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+                let fallback_id: Option<i64> = sqlx::query_scalar(
+                    "SELECT id FROM project_workflow_status
+                     WHERE project_id = $1 AND requires_assignee = FALSE AND allows_assignment = TRUE
+                     ORDER BY position ASC LIMIT 1",
+                )
+                .bind(imp.project_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to find fallback status: {e}")))?;
+
+                if let Some(fid) = fallback_id {
+                    sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
+                        .bind(fid)
+                        .bind(imp.task_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ServerFnError::new(format!("Failed to reset task status: {e}")))?;
+                }
             }
         }
         sqlx::query("DELETE FROM assignments WHERE task_id = $1 AND assigned_to = $2")

@@ -1,6 +1,6 @@
 use crate::components::assignee_search::TaskAssigneesSection;
 use crate::components::status_select::TaskStatusSelect;
-use crate::types::{Task, TaskStatus, User};
+use crate::types::{Task, User, WorkflowStatusDto};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -8,19 +8,20 @@ use dioxus::prelude::*;
 #[component]
 pub fn TaskCard(
     task: Task,
+    all_statuses: Vec<WorkflowStatusDto>,
     all_users: Vec<User>,
     can_mutate: bool,
     on_dismiss: EventHandler<i64>,
-    on_status_change: EventHandler<(u64, TaskStatus)>,
+    on_status_change: EventHandler<(i64, i64)>,
     on_assign: EventHandler<(i64, i64)>,
     on_unassign: EventHandler<(i64, i64)>,
 ) -> Element {
     let task_id = task.id;
     let title = task.title.clone();
-    let current_status = task.status;
+    let current_status_id = task.workflow_status_id;
 
     rsx! {
-        div { class: "task-card status-{current_status.as_str()}",
+        div { class: "task-card",
             CardTopSection {
                 task_id,
                 project_id: task.project_id,
@@ -44,12 +45,15 @@ pub fn TaskCard(
                 on_unassign: move |uid| on_unassign.call((task_id, uid)),
             }
 
-            div { class: "task-card-footer",
-                TaskStatusSelect {
-                    status: current_status,
-                    aria_label: format!("Status for task: {title}"),
-                    can_mutate,
-                    on_change: move |new_st| on_status_change.call((task_id as u64, new_st)),
+            if !all_statuses.is_empty() {
+                div { class: "task-card-footer",
+                    TaskStatusSelect {
+                        current_status_id,
+                        available_statuses: all_statuses,
+                        aria_label: format!("Status for task: {title}"),
+                        can_mutate,
+                        on_change: move |new_st_id| on_status_change.call((task_id, new_st_id)),
+                    }
                 }
             }
         }
