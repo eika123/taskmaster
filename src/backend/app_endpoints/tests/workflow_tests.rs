@@ -9,6 +9,7 @@
 //! 6. Status deletion safety: `ON DELETE RESTRICT` prevents orphaning tasks on column deletion.
 //! 7. Role-gated workflow transitions: users lacking required permission bits receive errors on restricted moves.
 
+use crate::backend::app_endpoints::projects::create_project;
 use crate::backend::app_endpoints::tasks::*;
 use crate::backend::app_endpoints::tests::test_helpers::run_as_user;
 use crate::backend::database::get_db;
@@ -837,6 +838,78 @@ async fn test_delete_workflow_status_with_remap_guardrail() {
         // Verify 'Accepted' is completely removed from project statuses
         let remaining_statuses = get_project_workflow_statuses(proj_id).await.unwrap();
         assert!(!remaining_statuses.iter().any(|s| s.id == accepted_id));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_new_project_task_creation_and_my_workflow_statuses_visibility() {
+    let _pool = crate::backend::database::get_db().await;
+
+    run_as_user(1, || async move {
+        // 1. Create a brand new project
+        let proj = create_project(
+            "Auto Tasks Sync Project".to_string(),
+            "Testing instant task visibility".to_string(),
+            None,
+            Some("classic_kanban".to_string()),
+        )
+        .await
+        .expect("Project creation must succeed");
+
+        let proj_id = proj.id;
+
+        // 2. Add tasks via direct project ID and via fallback 0 ID
+        suggest_task_for_project(
+            proj_id,
+            "Direct Project Task".to_string(),
+            "Direct task details".to_string(),
+        )
+        .await
+        .expect("Direct task suggestion must succeed");
+
+        suggest_task_for_project(
+            0,
+            "Auto Resolved Project Task".to_string(),
+            "Auto task details".to_string(),
+        )
+        .await
+        .expect("Auto-resolved task suggestion must succeed");
+
+        // 3. Fetch workflow statuses for user's views
+        let my_statuses = get_my_workflow_statuses()
+            .await
+            .expect("get_my_workflow_statuses must succeed");
+        assert!(
+            !my_statuses.is_empty(),
+            "User must have workflow statuses available"
+        );
+        let has_backlog = my_statuses.iter().any(|s| s.name == "Backlog");
+        assert!(has_backlog, "My statuses must contain 'Backlog'");
+
+        // 4. Fetch my tasks and verify instant presence with matching status metadata
+        let my_tasks = get_my_tasks(None, 100)
+            .await
+            .expect("get_my_tasks must succeed");
+        let direct_task = my_tasks
+            .iter()
+            .find(|t| t.title == "Direct Project Task")
+            .expect("Direct Project Task must be present in user's task view");
+        assert_eq!(direct_task.project_id, proj_id);
+        assert_eq!(
+            direct_task.workflow_status_name.as_deref(),
+            Some("Backlog")
+        );
+
+        let auto_task = my_tasks
+            .iter()
+            .find(|t| t.title == "Auto Resolved Project Task")
+            .expect("Auto Resolved Task must be present in user's task view");
+        assert_eq!(auto_task.project_id, proj_id);
+        assert_eq!(
+            auto_task.workflow_status_name.as_deref(),
+            Some("Backlog")
+        );
     })
     .await;
 }

@@ -76,8 +76,6 @@ pub fn ProjectBoardPage(project_id: i64, view: Option<ProjectViewKind>) -> Eleme
             let snap = snapshot.clone();
             let p_name = snap.project_name.clone();
             let perms = snap.caller_permissions;
-            let board_signal = use_signal(|| snap.clone());
-
             rsx! {
                 div { class: "project-board-page",
                     BoardTopBar {
@@ -122,9 +120,10 @@ pub fn ProjectBoardPage(project_id: i64, view: Option<ProjectViewKind>) -> Eleme
                         }
                     }
 
+                    // Pass fresh snapshot directly instead of caching in a stagnant signal so newly created tasks render immediately
                     ProjectViewHost {
                         view_kind: selected_view,
-                        board: board_signal,
+                        board: snap.clone(),
                         on_move_task: on_move,
                     }
                 }

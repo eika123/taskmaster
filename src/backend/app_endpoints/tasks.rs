@@ -46,6 +46,32 @@ pub async fn suggest_task_for_project(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
+    // When project_id <= 0 (e.g. from global My Tasks modal), auto-resolve user's most recent active project
+    let target_project_id = if project_id <= 0 {
+        let default_proj: Option<i64> = sqlx::query_scalar(
+            "SELECT p.id FROM project p
+             LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
+             WHERE p.leader_id = $1 OR (pm.user_id = $1 AND has_perm(pm.permissions_mask, $2))
+             ORDER BY p.id DESC LIMIT 1",
+        )
+        .bind(user.id)
+        .bind(Permission::EXECUTE.as_i64())
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+        match default_proj {
+            Some(pid) => pid,
+            None => {
+                return Err(ServerFnError::new(
+                    "No accessible projects found to create tasks in. Please create a project first.",
+                ))
+            }
+        }
+    } else {
+        project_id
+    };
+
     let can_create: bool = sqlx::query_scalar(
         "SELECT (p.leader_id = $1 OR EXISTS (
             SELECT 1 FROM project_members pm
@@ -54,7 +80,7 @@ pub async fn suggest_task_for_project(
          FROM project p WHERE p.id = $2",
     )
     .bind(user.id)
-    .bind(project_id)
+    .bind(target_project_id)
     .bind(Permission::EXECUTE.as_i64())
     .fetch_optional(pool)
     .await
@@ -67,22 +93,32 @@ pub async fn suggest_task_for_project(
         ));
     }
 
+    // Fallback to lowest position status if is_initial is not explicitly flagged, preventing NOT NULL violations
     let initial_status_id: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND is_initial = TRUE LIMIT 1",
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 ORDER BY is_initial DESC, position ASC LIMIT 1",
     )
-    .bind(project_id)
+    .bind(target_project_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
+    let status_id = match initial_status_id {
+        Some(sid) => sid,
+        None => {
+            return Err(ServerFnError::new(
+                "This project has no workflow statuses defined.",
+            ))
+        }
+    };
+
     sqlx::query(
         "INSERT INTO task (project_id, title, description, author, workflow_status_id) VALUES ($1, $2, $3, $4, $5)",
     )
-    .bind(project_id)
+    .bind(target_project_id)
     .bind(task_title.trim())
     .bind(description.trim())
     .bind(user.id)
-    .bind(initial_status_id)
+    .bind(status_id)
     .execute(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to create suggested task: {e}")))?;
@@ -848,11 +884,33 @@ pub async fn move_task_workflow_status(
     .await
     .unwrap_or(false);
 
-    if !target_exists {
-        return Err(ServerFnError::new(
-            "Target workflow status does not belong to this project.",
-        ));
-    }
+    let effective_status_id = if target_exists {
+        new_workflow_status_id
+    } else {
+        // Cross-project resolution (e.g. from aggregated My Tasks view):
+        // Match target status by name or category within this task's project
+        let resolved: Option<i64> = sqlx::query_scalar(
+            "SELECT p2.id FROM project_workflow_status p1
+             JOIN project_workflow_status p2 ON (p2.name = p1.name OR p2.category = p1.category) AND p2.project_id = $2
+             WHERE p1.id = $1
+             ORDER BY (p2.name = p1.name) DESC, p2.position ASC
+             LIMIT 1",
+        )
+        .bind(new_workflow_status_id)
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        match resolved {
+            Some(id) => id,
+            None => {
+                return Err(ServerFnError::new(
+                    "Target workflow status does not belong to this project.",
+                ))
+            }
+        }
+    };
 
     let member_perm: Option<i64> = sqlx::query_scalar(
         "SELECT CASE
@@ -890,14 +948,14 @@ pub async fn move_task_workflow_status(
 
     if has_transitions {
         if let Some(from_id) = current_ws_id {
-            if from_id != new_workflow_status_id {
+            if from_id != effective_status_id {
                 let required_perm: Option<i64> = sqlx::query_scalar(
                     "SELECT required_permission FROM project_workflow_transition
                      WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3",
                 )
                 .bind(project_id)
                 .bind(from_id)
-                .bind(new_workflow_status_id)
+                .bind(effective_status_id)
                 .fetch_optional(pool)
                 .await
                 .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
@@ -921,7 +979,7 @@ pub async fn move_task_workflow_status(
     }
 
     sqlx::query("UPDATE task SET workflow_status_id = $1 WHERE id = $2")
-        .bind(new_workflow_status_id)
+        .bind(effective_status_id)
         .bind(task_id)
         .execute(pool)
         .await
@@ -975,6 +1033,69 @@ pub async fn get_project_workflow_statuses(
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch workflow statuses: {e}")))?;
+
+    Ok(statuses)
+}
+
+/// Fetches distinct workflow statuses across all projects the current user has access to,
+/// providing real database status IDs and metadata for aggregated views like My Tasks.
+#[server]
+pub async fn get_my_workflow_statuses() -> Result<Vec<WorkflowStatusDto>, ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let statuses = sqlx::query_as::<_, WorkflowStatusDto>(
+        "WITH user_statuses AS (
+            SELECT DISTINCT ON (pws.name)
+                   pws.id, pws.project_id, pws.name, pws.category, pws.badge_variant,
+                   pws.position, pws.wip_limit, pws.is_initial, pws.allows_assignment,
+                   pws.requires_assignee,
+                   COUNT(t.id)::bigint AS task_count,
+                   (pws.wip_limit IS NOT NULL AND COUNT(t.id) > pws.wip_limit) AS wip_exceeded,
+                   pws.created_at
+            FROM project_workflow_status pws
+            JOIN project p ON pws.project_id = p.id
+            LEFT JOIN task t ON t.workflow_status_id = pws.id AND (t.author = $1 OR EXISTS (
+                SELECT 1 FROM assignments a WHERE a.task_id = t.id AND a.assigned_to = $1
+            ))
+            WHERE (p.leader_id = $1 OR EXISTS (
+                SELECT 1 FROM project_members pm
+                WHERE pm.project_id = p.id AND pm.user_id = $1
+            ))
+            GROUP BY pws.name, pws.id, pws.project_id, pws.category, pws.badge_variant, pws.position,
+                     pws.wip_limit, pws.is_initial, pws.allows_assignment, pws.requires_assignee, pws.created_at
+            ORDER BY pws.name, pws.position ASC
+        )
+        SELECT * FROM user_statuses ORDER BY position ASC, id ASC",
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch user workflow statuses: {e}")))?;
+
+    if statuses.is_empty() {
+        let starter = &WorkflowTemplate::starter_templates()[0];
+        return Ok(starter
+            .statuses
+            .iter()
+            .enumerate()
+            .map(|(i, s)| WorkflowStatusDto {
+                id: (i + 1) as i64,
+                project_id: 0,
+                name: s.name.clone(),
+                category: s.category,
+                badge_variant: s.badge_variant,
+                position: s.position,
+                wip_limit: s.wip_limit,
+                is_initial: s.is_initial,
+                allows_assignment: s.allows_assignment,
+                requires_assignee: s.requires_assignee,
+                task_count: 0,
+                wip_exceeded: false,
+                created_at: chrono::Utc::now(),
+            })
+            .collect());
+    }
 
     Ok(statuses)
 }

@@ -18,7 +18,11 @@ pub fn TaskColumn(
     let sid = status.id;
     let filtered_tasks: Vec<Task> = tasks
         .into_iter()
-        .filter(|t| t.workflow_status_id == sid)
+        .filter(|t| {
+            // Match exact status ID for project boards, or match by status name for aggregated My Tasks
+            t.workflow_status_id == sid
+                || (status.project_id == 0 && t.workflow_status_name.as_deref() == Some(&status.name))
+        })
         .collect();
     let count = filtered_tasks.len();
     let status_name = status.name.clone();

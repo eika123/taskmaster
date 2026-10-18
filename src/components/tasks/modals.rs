@@ -24,7 +24,8 @@ pub fn InlineCreateTaskModal(
         is_creating_task.set(true);
         new_task_err.set(None);
 
-        let target_pid = project_id.unwrap_or(1);
+        // Fallback to 0 lets backend auto-resolve the user's active project instead of failing on hardcoded ID
+        let target_pid = project_id.unwrap_or(0);
         spawn(async move {
             match suggest_task_for_project(target_pid, title, desc).await {
                 Ok(_) => {

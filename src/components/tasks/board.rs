@@ -2,21 +2,22 @@ use super::column::TaskColumn;
 use super::modals::InlineCreateTaskModal;
 use super::org_modal::ProjectOrganizationsModal;
 use crate::backend::app_endpoints::{
-    assign_task, delete_project, delete_task, get_my_project_member, get_my_tasks, get_project,
-    get_project_assignable_users, get_project_tasks, get_project_workflow_statuses,
-    move_task_workflow_status, unassign_task,
+    assign_task, delete_project, delete_task, get_my_project_member, get_my_tasks,
+    get_my_workflow_statuses, get_project, get_project_assignable_users, get_project_tasks,
+    get_project_workflow_statuses, move_task_workflow_status, unassign_task,
 };
 use crate::components::column_selector::ColumnSelector;
 use crate::components::dashboard::ConfirmDeleteModal;
 use crate::components::projects::InviteProjectMemberModal;
-use crate::types::{has_perm, Permission, Project, Task, User, WorkflowStatusDto, WorkflowTemplate};
+use crate::types::{has_perm, Permission, Project, Task, User, WorkflowStatusDto};
 use crate::Route;
 use dioxus::prelude::*;
 
 /// Multi-status Kanban task view component (used for My Tasks aggregation and project task board).
 #[component]
 pub fn TaskView(project_id: Option<i64>) -> Element {
-    let mut selected_status_ids = use_signal(Vec::<i64>::new);
+    // None defaults to displaying all columns immediately on initial render and SSR without an empty flash
+    let mut selected_status_filter = use_signal(|| Option::<Vec<i64>>::None);
 
     let pid = project_id;
     let mut tasks_resource = use_server_future(move || async move {
@@ -31,26 +32,8 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
         if let Some(p) = pid {
             get_project_workflow_statuses(p).await.unwrap_or_default()
         } else {
-            WorkflowTemplate::starter_templates()[0]
-                .statuses
-                .iter()
-                .enumerate()
-                .map(|(i, s)| WorkflowStatusDto {
-                    id: (i + 1) as i64,
-                    project_id: 0,
-                    name: s.name.clone(),
-                    category: s.category,
-                    badge_variant: s.badge_variant,
-                    position: s.position,
-                    wip_limit: s.wip_limit,
-                    is_initial: s.is_initial,
-                    allows_assignment: s.allows_assignment,
-                    requires_assignee: s.requires_assignee,
-                    task_count: 0,
-                    wip_exceeded: false,
-                    created_at: chrono::Utc::now(),
-                })
-                .collect()
+            // Query real workflow statuses from user's projects rather than fake hardcoded IDs
+            get_my_workflow_statuses().await.unwrap_or_default()
         }
     })?;
 
@@ -59,13 +42,8 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
         None => Vec::new(),
     };
 
-    use_effect(move || {
-        if let Some(s) = &*workflow_statuses_resource.read() {
-            if selected_status_ids.read().is_empty() {
-                selected_status_ids.set(s.iter().map(|st| st.id).collect());
-            }
-        }
-    });
+    let active_status_ids = selected_status_filter()
+        .unwrap_or_else(|| all_statuses.iter().map(|s| s.id).collect());
 
     let project_resource = use_server_future(move || async move {
         if let Some(p) = pid {
@@ -86,27 +64,16 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     let mut assignable_users_resource =
         use_server_future(move || async move { get_project_assignable_users(pid).await })?;
 
-    let mut task_list = use_signal(|| match &*tasks_resource.read() {
+    // Derive tasks and assignable users directly from resources so updates render immediately without stale signals
+    let current_tasks = match &*tasks_resource.read() {
         Some(Ok(list)) => list.clone(),
         _ => Vec::new(),
-    });
+    };
 
-    let mut all_users = use_signal(|| match &*assignable_users_resource.read() {
+    let current_users = match &*assignable_users_resource.read() {
         Some(Ok(list)) => list.clone(),
         _ => Vec::new(),
-    });
-
-    use_effect(move || {
-        if let Some(Ok(list)) = &*tasks_resource.read() {
-            task_list.set(list.clone());
-        }
-    });
-
-    use_effect(move || {
-        if let Some(Ok(list)) = &*assignable_users_resource.read() {
-            all_users.set(list.clone());
-        }
-    });
+    };
 
     let mut show_new_task = use_signal(|| false);
     let mut show_invite_modal = use_signal(|| false);
@@ -119,7 +86,6 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     let nav = use_navigator();
 
     let on_dismiss_handler = move |task_id: i64| {
-        task_list.with_mut(|tasks| tasks.retain(|t| t.id != task_id));
         spawn(async move {
             let _ = delete_task(task_id).await;
             tasks_resource.restart();
@@ -127,11 +93,6 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     };
 
     let on_status_change_handler = move |(task_id, new_status_id): (i64, i64)| {
-        task_list.with_mut(|tasks| {
-            if let Some(t) = tasks.iter_mut().find(|t| t.id == task_id) {
-                t.workflow_status_id = new_status_id;
-            }
-        });
         spawn(async move {
             let _ = move_task_workflow_status(task_id, new_status_id).await;
             tasks_resource.restart();
@@ -253,27 +214,31 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
 
             ColumnSelector {
                 statuses: all_statuses.clone(),
-                selected_status_ids: selected_status_ids(),
-                on_toggle: move |sid: i64| {
-                    let mut list = selected_status_ids();
-                    if let Some(pos) = list.iter().position(|&s| s == sid) {
-                        list.remove(pos);
-                    } else {
-                        list.push(sid);
+                selected_status_ids: active_status_ids.clone(),
+                on_toggle: {
+                    let all_statuses = all_statuses.clone();
+                    move |sid: i64| {
+                        let mut list = selected_status_filter()
+                            .unwrap_or_else(|| all_statuses.iter().map(|s| s.id).collect());
+                        if let Some(pos) = list.iter().position(|&s| s == sid) {
+                            list.remove(pos);
+                        } else {
+                            list.push(sid);
+                        }
+                        selected_status_filter.set(Some(list));
                     }
-                    selected_status_ids.set(list);
                 },
                 on_select_all: {
                     let all_ids: Vec<i64> = all_statuses.iter().map(|s| s.id).collect();
-                    move |_| selected_status_ids.set(all_ids.clone())
+                    move |_| selected_status_filter.set(Some(all_ids.clone()))
                 },
-                on_clear: move |_| selected_status_ids.set(Vec::new()),
+                on_clear: move |_| selected_status_filter.set(Some(Vec::new())),
             }
 
             {
                 let active_status_objs: Vec<WorkflowStatusDto> = all_statuses
                     .iter()
-                    .filter(|s| selected_status_ids().contains(&s.id))
+                    .filter(|s| active_status_ids.contains(&s.id))
                     .cloned()
                     .collect();
 
@@ -281,8 +246,8 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                     TaskColumnsContainer {
                         active_statuses: active_status_objs,
                         all_statuses: all_statuses.clone(),
-                        tasks: task_list(),
-                        all_users: all_users(),
+                        tasks: current_tasks,
+                        all_users: current_users,
                         can_mutate,
                         on_dismiss: on_dismiss_handler,
                         on_status_change: on_status_change_handler,
