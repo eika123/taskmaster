@@ -2038,3 +2038,392 @@ body {
     justify-content: space-between;
     margin-top: auto;
 }
+
+/* ==========================================================================
+   Milestone M2: Pluggable View Registry & View Switcher Styles
+   ========================================================================== */
+
+.project-board-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px 24px;
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.view-switcher-bar {
+    display: flex;
+    align-items: center;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 3px;
+    gap: 4px;
+}
+
+.btn-view-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    font-size: var(--font-size-button-small);
+    font-weight: var(--font-weight-normal);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-view-tab:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-surface-hover);
+}
+
+.btn-view-tab.active {
+    background-color: var(--bg-surface-raised);
+    color: var(--primary);
+    font-weight: var(--font-weight-bold);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Soft WIP Limit Warning Indicators */
+.wip-warning, .wip-limit-exceeded {
+    border-color: #f59e0b !important;
+}
+
+.wip-badge {
+    background-color: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid #f59e0b;
+    border-radius: var(--radius-pill);
+    padding: 2px 8px;
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-bold);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Semantic Badge Variants */
+.badge-variant-default, .badge-default { background-color: var(--bg-surface-raised); color: var(--text-primary); }
+.badge-variant-info, .badge-info { background-color: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+.badge-variant-success, .badge-success { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid #10b981; }
+.badge-variant-warning, .badge-warning { background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid #f59e0b; }
+.badge-variant-danger, .badge-danger { background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid #ef4444; }
+.badge-variant-purple, .badge-purple { background-color: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid #a855f7; }
+.badge-variant-teal, .badge-teal { background-color: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px solid #14b8a6; }
+
+.status-indicator-default { background-color: var(--text-muted); }
+.status-indicator-info { background-color: #3b82f6; }
+.status-indicator-success { background-color: #10b981; }
+.status-indicator-warning { background-color: #f59e0b; }
+.status-indicator-danger { background-color: #ef4444; }
+.status-indicator-purple { background-color: #a855f7; }
+.status-indicator-teal { background-color: #14b8a6; }
+
+/* List View Styles */
+.task-list-view {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.task-table-container {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.task-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-body-sm);
+    text-align: left;
+}
+
+.task-list-table thead {
+    background-color: var(--bg-input);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.task-list-table th {
+    padding: 12px 16px;
+    font-weight: var(--font-weight-bold);
+    color: var(--text-muted);
+    font-size: var(--font-size-meta);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.task-list-row {
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background-color 0.12s ease;
+}
+
+.task-list-row:hover {
+    background-color: var(--bg-surface-hover);
+}
+
+.task-list-row td {
+    padding: 12px 16px;
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+.task-id-cell {
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: var(--font-size-meta);
+}
+
+.task-list-title-link {
+    color: var(--text-primary);
+    font-weight: var(--font-weight-bold);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+
+.task-list-title-link:hover {
+    color: var(--primary);
+}
+
+.task-status-select-sm {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    font-size: var(--font-size-caption);
+    outline: none;
+    cursor: pointer;
+}
+
+.assignee-pill-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.assignee-pill {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    padding: 2px 8px;
+    font-size: var(--font-size-caption);
+    color: var(--text-secondary);
+}
+
+.assignee-pill.unassigned {
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+.progress-pill {
+    background-color: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border-radius: var(--radius-pill);
+    padding: 2px 6px;
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-bold);
+}
+
+/* Swimlanes View Styles */
+.kanban-swimlanes-view {
+    width: 100%;
+}
+
+.swimlanes-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.swimlane-row {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.swimlane-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 8px;
+}
+
+.swimlane-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.swimlane-title {
+    margin: 0;
+    font-size: var(--font-size-cardheader-medium);
+    font-weight: var(--font-weight-bold);
+    color: var(--text-primary);
+}
+
+.swimlane-count {
+    font-size: var(--font-size-meta);
+    color: var(--text-muted);
+}
+
+.swimlane-columns-grid {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(220px, 1fr);
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+}
+
+.swimlane-cell {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 80px;
+}
+
+.swimlane-cell-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: var(--font-size-caption);
+    color: var(--text-muted);
+    font-weight: var(--font-weight-bold);
+}
+
+.swimlane-cell-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.swimlane-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Gantt View Styles */
+.gantt-view {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+}
+
+.gantt-header-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+}
+
+.summary-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.summary-label {
+    font-size: var(--font-size-meta);
+    color: var(--text-muted);
+}
+
+.summary-val {
+    font-size: var(--font-size-containerheader-medium);
+    font-weight: var(--font-weight-extrabold);
+    color: var(--text-primary);
+}
+
+.gantt-timeline-container {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.gantt-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-body-sm);
+}
+
+.gantt-table thead {
+    background-color: var(--bg-input);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.gantt-table th {
+    padding: 12px 16px;
+    font-weight: var(--font-weight-bold);
+    color: var(--text-muted);
+    font-size: var(--font-size-meta);
+    text-align: left;
+}
+
+.gantt-row {
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.gantt-row td {
+    padding: 12px 16px;
+    vertical-align: middle;
+}
+
+.gantt-date-range {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--font-size-meta);
+    color: var(--text-secondary);
+}
+
+.gantt-progress-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gantt-progress-track {
+    flex: 1;
+    height: 8px;
+    background-color: var(--bg-input);
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+}
+
+.gantt-progress-fill {
+    height: 100%;
+    background-color: var(--primary);
+    border-radius: var(--radius-pill);
+}
+
+.gantt-progress-label {
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-bold);
+    color: var(--text-secondary);
+    min-width: 32px;
+}

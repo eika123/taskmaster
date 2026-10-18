@@ -1,25 +1,22 @@
-use dioxus::prelude::*;
-use crate::Route;
+use super::governor_view::OrganizationGovernorView;
+use super::member_view::OrganizationMemberView;
 use crate::backend::app_endpoints::{
     get_organization, get_organization_affiliated_projects, get_organization_members,
     get_organization_pending_invitations, get_organization_roles, get_users,
 };
-use super::governor_view::OrganizationGovernorView;
-use super::member_view::OrganizationMemberView;
+use crate::Route;
+use dioxus::prelude::*;
 
 #[component]
 pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
-    let mut org_resource = use_server_future(move || async move {
-        get_organization(organization_id).await
-    })?;
+    let mut org_resource =
+        use_server_future(move || async move { get_organization(organization_id).await })?;
 
-    let mut members_resource = use_server_future(move || async move {
-        get_organization_members(organization_id).await
-    })?;
+    let mut members_resource =
+        use_server_future(move || async move { get_organization_members(organization_id).await })?;
 
-    let mut roles_resource = use_server_future(move || async move {
-        get_organization_roles(organization_id).await
-    })?;
+    let mut roles_resource =
+        use_server_future(move || async move { get_organization_roles(organization_id).await })?;
 
     let mut projects_resource = use_server_future(move || async move {
         get_organization_affiliated_projects(organization_id).await
@@ -29,9 +26,7 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
         get_organization_pending_invitations(organization_id).await
     })?;
 
-    let users_resource = use_server_future(|| async move {
-        get_users().await
-    })?;
+    let users_resource = use_server_future(|| async move { get_users().await })?;
 
     let auth = use_context::<crate::components::AuthState>();
     let current_user_id = auth.user.read().as_ref().map(|u| u.id).unwrap_or(0);
@@ -40,12 +35,7 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
         Some(Ok(org)) => org.clone(),
         Some(Err(err)) => {
             return rsx! {
-                div { class: "dashboard-container",
-                    div { class: "task-detail-error", "Failed to load organization: {err}" }
-                    div { style: "margin-top: 16px;",
-                        Link { to: Route::DashboardPage {}, class: "btn-task-cancel", "← Back to Dashboard" }
-                    }
-                }
+                OrgLoadError { error: err.to_string() }
             };
         }
         None => {
@@ -94,16 +84,7 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
 
     rsx! {
         div { class: "dashboard-container",
-            div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;",
-                Link {
-                    to: Route::DashboardPage {},
-                    style: "color: var(--primary); text-decoration: none; font-size: var(--font-size-body-sm); font-weight: var(--font-weight-bold); display: inline-flex; align-items: center; gap: 6px;",
-                    "← Back to Dashboard"
-                }
-                span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
-                    if is_governor { "Viewing as: Governor" } else { "Viewing as: Organization Member" }
-                }
-            }
+            OrgDashboardTopNav { is_governor }
 
             if is_governor {
                 OrganizationGovernorView {
@@ -127,3 +108,32 @@ pub fn OrganizationDashboardPage(organization_id: i64) -> Element {
     }
 }
 
+/// Top navigation breadcrumb for the organization dashboard page.
+#[component]
+fn OrgDashboardTopNav(is_governor: bool) -> Element {
+    rsx! {
+        div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;",
+            Link {
+                to: Route::DashboardPage {},
+                style: "color: var(--primary); text-decoration: none; font-size: var(--font-size-body-sm); font-weight: var(--font-weight-bold); display: inline-flex; align-items: center; gap: 6px;",
+                "← Back to Dashboard"
+            }
+            span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
+                if is_governor { "Viewing as: Governor" } else { "Viewing as: Organization Member" }
+            }
+        }
+    }
+}
+
+/// Error display when loading organization details fails.
+#[component]
+fn OrgLoadError(error: String) -> Element {
+    rsx! {
+        div { class: "dashboard-container",
+            div { class: "task-detail-error", "Failed to load organization: {error}" }
+            div { style: "margin-top: 16px;",
+                Link { to: Route::DashboardPage {}, class: "btn-task-cancel", "← Back to Dashboard" }
+            }
+        }
+    }
+}

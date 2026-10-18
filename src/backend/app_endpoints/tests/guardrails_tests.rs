@@ -72,12 +72,11 @@ async fn test_project_and_organization_database_guardrails() {
         .unwrap();
 
     // Verify trigger: prevent_remove_governing_user MUST abort deletion of the governor
-    let remove_governor_result = sqlx::query(
-        "DELETE FROM organization_members WHERE organization_id = $1 AND user_id = 1",
-    )
-    .bind(org_id)
-    .execute(pool)
-    .await;
+    let remove_governor_result =
+        sqlx::query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = 1")
+            .bind(org_id)
+            .execute(pool)
+            .await;
     assert!(
         remove_governor_result.is_err(),
         "Database trigger should prevent removing governing user from organization_members"
@@ -131,20 +130,21 @@ async fn test_project_and_organization_database_guardrails() {
         .unwrap();
 
     // Add Bob (user 2) as a standard project member
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'member')")
-        .bind(proj_id)
-        .bind(2)
-        .execute(pool)
-        .await
-        .unwrap();
-
-    // Verify trigger: prevent_remove_project_leader MUST block removing the leader
-    let remove_leader_result = sqlx::query(
-        "DELETE FROM project_members WHERE project_id = $1 AND user_id = 1",
+    sqlx::query(
+        "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'member')",
     )
     .bind(proj_id)
+    .bind(2)
     .execute(pool)
-    .await;
+    .await
+    .unwrap();
+
+    // Verify trigger: prevent_remove_project_leader MUST block removing the leader
+    let remove_leader_result =
+        sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = 1")
+            .bind(proj_id)
+            .execute(pool)
+            .await;
     assert!(
         remove_leader_result.is_err(),
         "Database trigger should prevent removing project leader from project_members"

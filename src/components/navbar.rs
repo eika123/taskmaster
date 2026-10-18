@@ -1,15 +1,13 @@
-use dioxus::prelude::*;
+pub use crate::backend::app_endpoints::*;
 use crate::components::*;
 pub use crate::types::*;
 pub use crate::Route;
-
-
-pub use crate::backend::app_endpoints::*;
+use dioxus::prelude::*;
 
 /// Shared navigation header.
 #[component]
 pub fn Navbar() -> Element {
-    let mut auth = use_context::<AuthState>();
+    let auth = use_context::<AuthState>();
     let current_user = (auth.user)();
 
     rsx! {
@@ -35,36 +33,54 @@ pub fn Navbar() -> Element {
 
                 div { class: "navbar-actions",
                     if let Some(user) = current_user {
-                        div { class: "user-profile-badge",
-                            span { class: "user-avatar-circle",
-                                "{user.name.chars().next().unwrap_or('U')}"
-                            }
-                            span { class: "user-name-text", "{user.name}" }
-                            button {
-                                r#type: "button",
-                                class: "btn-navbar-logout",
-                                onclick: move |_| auth.logout_user(),
-                                "Log Out"
-                            }
-                        }
+                        UserProfileBadge { user }
                     } else {
-                        div { class: "auth-nav-buttons",
-                            Link {
-                                to: Route::LoginPage {},
-                                class: "btn-navbar-login",
-                                "Log In"
-                            }
-                            Link {
-                                to: Route::RegisterPage {},
-                                class: "btn-navbar-register",
-                                "Sign Up"
-                            }
-                        }
+                        NavbarAuthButtons {}
                     }
                 }
             }
         }
 
         main { class: "app-main-content", Outlet::<Route> {} }
+    }
+}
+
+/// Displays the current logged-in user profile avatar, name, and logout button.
+#[component]
+fn UserProfileBadge(user: User) -> Element {
+    let mut auth = use_context::<AuthState>();
+
+    rsx! {
+        div { class: "user-profile-badge",
+            span { class: "user-avatar-circle",
+                "{user.name.chars().next().unwrap_or('U')}"
+            }
+            span { class: "user-name-text", "{user.name}" }
+            button {
+                r#type: "button",
+                class: "btn-navbar-logout",
+                onclick: move |_| auth.logout_user(),
+                "Log Out"
+            }
+        }
+    }
+}
+
+/// Login and registration buttons for unauthenticated visitors.
+#[component]
+fn NavbarAuthButtons() -> Element {
+    rsx! {
+        div { class: "auth-nav-buttons",
+            Link {
+                to: Route::LoginPage {},
+                class: "btn-navbar-login",
+                "Log In"
+            }
+            Link {
+                to: Route::RegisterPage {},
+                class: "btn-navbar-register",
+                "Sign Up"
+            }
+        }
     }
 }

@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::types::TaskStatus;
+use dioxus::prelude::*;
 
 #[component]
 pub fn TaskStatusSelect(

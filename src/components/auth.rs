@@ -64,24 +64,32 @@ pub fn AuthLayout() -> Element {
         }
     } else {
         rsx! {
-            div { class: "unauthorized-container",
-                div { class: "unauthorized-card",
-                    span { class: "unauthorized-icon", "🔒" }
-                    h2 { class: "unauthorized-title", "Authentication Required" }
-                    p { class: "unauthorized-desc",
-                        "You must be logged in to view and manage tasks on the task board."
+            UnauthorizedFallbackCard {}
+        }
+    }
+}
+
+/// Card displayed when an unauthenticated user visits a route that requires login.
+#[component]
+fn UnauthorizedFallbackCard() -> Element {
+    rsx! {
+        div { class: "unauthorized-container",
+            div { class: "unauthorized-card",
+                span { class: "unauthorized-icon", "🔒" }
+                h2 { class: "unauthorized-title", "Authentication Required" }
+                p { class: "unauthorized-desc",
+                    "You must be logged in to view and manage tasks on the task board."
+                }
+                div { class: "unauthorized-actions",
+                    Link {
+                        to: Route::LoginPage {},
+                        class: "btn-unauthorized-login",
+                        "Log In"
                     }
-                    div { class: "unauthorized-actions",
-                        Link {
-                            to: Route::LoginPage {},
-                            class: "btn-unauthorized-login",
-                            "Log In"
-                        }
-                        Link {
-                            to: Route::LandingPage {},
-                            class: "btn-unauthorized-home",
-                            "Back to Home"
-                        }
+                    Link {
+                        to: Route::LandingPage {},
+                        class: "btn-unauthorized-home",
+                        "Back to Home"
                     }
                 }
             }

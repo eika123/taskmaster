@@ -45,25 +45,29 @@ async fn test_organization_roles_and_deletion_guardrails() {
     .unwrap();
 
     // Verify trigger auto-seeded default 'admin' and 'member' roles
-    let seeded_roles: Vec<String> = sqlx::query_scalar(
-        "SELECT role FROM organization_role WHERE organization_id = $1;",
-    )
-    .bind(org_id)
-    .fetch_all(pool)
-    .await
-    .unwrap();
+    let seeded_roles: Vec<String> =
+        sqlx::query_scalar("SELECT role FROM organization_role WHERE organization_id = $1;")
+            .bind(org_id)
+            .fetch_all(pool)
+            .await
+            .unwrap();
 
     // check "admin" and "member" are in seeded_roles
-    assert!(seeded_roles.iter().any(|r| r == "admin"), "missing admin role");
-    assert!(seeded_roles.iter().any(|r| r == "member"), "missing member role");
+    assert!(
+        seeded_roles.iter().any(|r| r == "admin"),
+        "missing admin role"
+    );
+    assert!(
+        seeded_roles.iter().any(|r| r == "member"),
+        "missing member role"
+    );
 
     // Step 2: Verify trigger protects built-in roles against deletion
-    let delete_admin_result = sqlx::query(
-        "DELETE FROM organization_role WHERE organization_id = $1 AND role = 'admin'",
-    )
-    .bind(org_id)
-    .execute(pool)
-    .await;
+    let delete_admin_result =
+        sqlx::query("DELETE FROM organization_role WHERE organization_id = $1 AND role = 'admin'")
+            .bind(org_id)
+            .execute(pool)
+            .await;
     assert!(
         delete_admin_result.is_err(),
         "Database trigger should prevent deleting built-in 'admin' role"
@@ -147,29 +151,39 @@ async fn test_organization_pending_invitations_and_cancellation() {
     // Step 2: Fetch pending invitations and verify contents
     run_as_user(1, move || async move {
         let pending_invitations = get_organization_pending_invitations(org_id).await.unwrap();
-        assert_eq!(pending_invitations.len(), 1, "Expected 1 pending invitation");
+        assert_eq!(
+            pending_invitations.len(),
+            1,
+            "Expected 1 pending invitation"
+        );
         assert_eq!(pending_invitations[0].invited_user_id, 2);
         assert_eq!(pending_invitations[0].message, "Welcome to the team!");
     })
     .await;
 
     // Step 3: Cancel the invitation
-    sqlx::query("DELETE FROM organization_invitation WHERE organization_id = $1 AND invited_user_id = 2")
-        .bind(org_id)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "DELETE FROM organization_invitation WHERE organization_id = $1 AND invited_user_id = 2",
+    )
+    .bind(org_id)
+    .execute(pool)
+    .await
+    .unwrap();
 
     // Step 4: Verify pending list is now empty
     run_as_user(1, move || async move {
         let after_cancellation = get_organization_pending_invitations(org_id).await.unwrap();
         assert_eq!(
-            after_cancellation.len(), 0,
+            after_cancellation.len(),
+            0,
             "Pending invitations should be empty after cancellation"
         );
     })
     .await;
 
     // Clean up
-    let _ = sqlx::query("DELETE FROM organization WHERE id = $1").bind(org_id).execute(pool).await;
+    let _ = sqlx::query("DELETE FROM organization WHERE id = $1")
+        .bind(org_id)
+        .execute(pool)
+        .await;
 }

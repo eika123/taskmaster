@@ -127,24 +127,36 @@ async fn test_semantic_flag_allows_assignment_blocks_assignment_for_initial_stat
     .unwrap();
 
     // Verify task automatically received workflow_status_id via trigger
-    let ws_id: Option<i64> = sqlx::query_scalar("SELECT workflow_status_id FROM task WHERE id = $1")
-        .bind(task_id)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    assert!(ws_id.is_some(), "Trigger must auto-populate workflow_status_id");
+    let ws_id: Option<i64> =
+        sqlx::query_scalar("SELECT workflow_status_id FROM task WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        ws_id.is_some(),
+        "Trigger must auto-populate workflow_status_id"
+    );
 
     // Attempting to assign while allows_assignment = false must fail
     run_as_user(1, move || async move {
         let assign_result = assign_task(task_id, 2).await;
-        assert!(assign_result.is_err(), "Assignment must be rejected when allows_assignment is false");
+        assert!(
+            assign_result.is_err(),
+            "Assignment must be rejected when allows_assignment is false"
+        );
 
         // Transition task to Accepted (allows_assignment = true)
-        set_task_status(task_id as u64, TaskStatus::Accepted).await.unwrap();
+        set_task_status(task_id as u64, TaskStatus::Accepted)
+            .await
+            .unwrap();
 
         // Assignment must now succeed
         let assign_after = assign_task(task_id, 2).await;
-        assert!(assign_after.is_ok(), "Assignment must succeed when allows_assignment is true");
+        assert!(
+            assign_after.is_ok(),
+            "Assignment must succeed when allows_assignment is true"
+        );
     })
     .await;
 }
@@ -187,7 +199,10 @@ async fn test_semantic_flag_requires_assignee_enforces_assignment_for_in_progres
     run_as_user(1, move || async move {
         // 1. Moving to InProgress without assignees must fail
         let move_fail = set_task_status(task_id as u64, TaskStatus::InProgress).await;
-        assert!(move_fail.is_err(), "Must reject InProgress without assignee");
+        assert!(
+            move_fail.is_err(),
+            "Must reject InProgress without assignee"
+        );
 
         // 2. Assign Bob (user 2)
         assign_task(task_id, 2).await.unwrap();
@@ -198,7 +213,10 @@ async fn test_semantic_flag_requires_assignee_enforces_assignment_for_in_progres
 
         // 4. Attempting to unassign the last assignee while in InProgress must fail
         let unassign_fail = unassign_task(task_id, 2).await;
-        assert!(unassign_fail.is_err(), "Must prevent removing last assignee from in_progress task");
+        assert!(
+            unassign_fail.is_err(),
+            "Must prevent removing last assignee from in_progress task"
+        );
     })
     .await;
 }
@@ -464,6 +482,153 @@ async fn test_role_gated_workflow_transition() {
             alice_move.is_ok(),
             "Alice with Permission::ADMIN must successfully execute gated transition"
         );
+    })
+    .await;
+}
+
+/// 8. Verifies get_project_board_snapshot retrieves the canonical BoardSnapshot
+/// with ordered statuses, computed task counts, caller permissions, and tasks.
+#[tokio::test]
+async fn test_get_project_board_snapshot_contract() {
+    let pool = get_db().await;
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, leader_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind("Snapshot Test Project")
+    .bind("Testing BoardSnapshot endpoint")
+    .bind(1)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, $2, 'admin', $3)")
+        .bind(proj_id)
+        .bind(1)
+        .bind(Permission::ADMIN_DEFAULT.as_i64())
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Fetch initial status id
+    let initial_status_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND is_initial = TRUE",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // Create 2 tasks in this project
+    sqlx::query(
+        "INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES
+         ($1, 'Snapshot Task 1', 1, 'suggested', $2),
+         ($1, 'Snapshot Task 2', 1, 'suggested', $2)",
+    )
+    .bind(proj_id)
+    .bind(initial_status_id)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Run as Alice (User 1)
+    run_as_user(1, move || async move {
+        let snapshot = get_project_board_snapshot(proj_id).await.unwrap();
+
+        assert_eq!(snapshot.project_id, proj_id);
+        assert_eq!(snapshot.project_name, "Snapshot Test Project");
+        assert_eq!(
+            snapshot.default_view,
+            crate::types::ProjectViewKind::KanbanClassic
+        );
+        assert!(snapshot
+            .enabled_views
+            .contains(&crate::types::ProjectViewKind::KanbanClassic));
+        assert!(snapshot
+            .enabled_views
+            .contains(&crate::types::ProjectViewKind::KanbanSwimlanes));
+        assert!(snapshot
+            .enabled_views
+            .contains(&crate::types::ProjectViewKind::List));
+        assert!(snapshot
+            .enabled_views
+            .contains(&crate::types::ProjectViewKind::Gantt));
+
+        assert_eq!(snapshot.statuses.len(), 5);
+        assert_eq!(snapshot.tasks.len(), 2);
+
+        // Verify task count on initial status
+        let initial_ws = snapshot.find_status(initial_status_id).unwrap();
+        assert_eq!(initial_ws.task_count, 2);
+    })
+    .await;
+
+    // Run as non-member (User 3) - should be denied
+    run_as_user(3, move || async move {
+        let res = get_project_board_snapshot(proj_id).await;
+        assert!(
+            res.is_err(),
+            "Non-member must be denied access to BoardSnapshot"
+        );
+    })
+    .await;
+}
+
+/// 9. Verifies move_task_workflow_status transitions a task to target status column
+/// and synchronizes the legacy status column via triggers.
+#[tokio::test]
+async fn test_move_task_workflow_status_end_to_end() {
+    let pool = get_db().await;
+
+    let proj_id: i64 = sqlx::query_scalar(
+        "INSERT INTO project (name, description, leader_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind("Move Task Test Project")
+    .bind("Testing move_task_workflow_status endpoint")
+    .bind(1)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, $2, 'admin', $3)")
+        .bind(proj_id)
+        .bind(1)
+        .bind(Permission::ADMIN_DEFAULT.as_i64())
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let accepted_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Accepted'",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let finished_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM project_workflow_status WHERE project_id = $1 AND name = 'Finished'",
+    )
+    .bind(proj_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    let task_id: i64 = sqlx::query_scalar(
+        "INSERT INTO task (project_id, title, author, status, workflow_status_id) VALUES ($1, 'Move Target Task', 1, 'accepted', $2) RETURNING id",
+    )
+    .bind(proj_id)
+    .bind(accepted_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    run_as_user(1, move || async move {
+        let updated_task = move_task_workflow_status(task_id, finished_id)
+            .await
+            .unwrap();
+        assert_eq!(updated_task.workflow_status_id, Some(finished_id));
+        assert_eq!(updated_task.status, TaskStatus::Finished);
     })
     .await;
 }

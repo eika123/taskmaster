@@ -1,10 +1,10 @@
-use dioxus::prelude::*;
 use crate::types::DashboardData;
+use dioxus::prelude::*;
 
 #[cfg(feature = "server")]
 use crate::types::{
-    GovernanceTransferOffer, OrganizationInvitation,
-    ProjectInvitation, ProjectLeadershipTransferOffer, UserInbox,
+    GovernanceTransferOffer, OrganizationInvitation, ProjectInvitation,
+    ProjectLeadershipTransferOffer, UserInbox,
 };
 
 #[cfg(feature = "server")]

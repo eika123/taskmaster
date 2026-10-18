@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
 use crate::types::{
-    Organization, Project, ProjectInviteDirectory, ProjectMember,
-    ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule, User,
+    Organization, Project, ProjectInviteDirectory, ProjectMember, ProjectMemberGrant,
+    ProjectOrgRoleRule, ProjectOrganization, User,
 };
 
 #[cfg(feature = "server")]
@@ -60,7 +60,9 @@ pub async fn get_project(project_id: i64) -> Result<Project, ServerFnError> {
     .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
 
     if !can_view_project(pool, project_id, user.id).await? {
-        return Err(ServerFnError::new("You do not have permission to view this project."));
+        return Err(ServerFnError::new(
+            "You do not have permission to view this project.",
+        ));
     }
 
     Ok(proj)
@@ -134,9 +136,7 @@ pub async fn delete_project(project_id: i64, confirmation: String) -> Result<(),
         .bind(project_id)
         .execute(pool)
         .await
-        .map_err(|e| {
-            ServerFnError::new(format!("Cannot delete project: {e}."))
-        })?;
+        .map_err(|e| ServerFnError::new(format!("Cannot delete project: {e}.")))?;
 
     Ok(())
 }
@@ -179,7 +179,9 @@ pub async fn get_project_members(project_id: i64) -> Result<Vec<ProjectMember>, 
     let pool = get_db().await;
 
     if !can_view_project(pool, project_id, user.id).await? {
-        return Err(ServerFnError::new("You do not have permission to view members of this project."));
+        return Err(ServerFnError::new(
+            "You do not have permission to view members of this project.",
+        ));
     }
 
     let members = sqlx::query_as::<_, ProjectMember>(
@@ -230,7 +232,14 @@ pub async fn get_project_assignable_users(
     let user = get_auth_user().await?;
     let pool = get_db().await;
     if let Some(pid) = project_id {
-        ensure_project_perm(pool, pid, user.id, Permission::READ.as_i64(), "You do not have permission to view assignable users for this project.").await?;
+        ensure_project_perm(
+            pool,
+            pid,
+            user.id,
+            Permission::READ.as_i64(),
+            "You do not have permission to view assignable users for this project.",
+        )
+        .await?;
 
         let users = sqlx::query_as::<_, User>(
             "SELECT u.id, u.name, u.email
@@ -243,16 +252,17 @@ pub async fn get_project_assignable_users(
         .bind(Permission::EXECUTE.as_i64())
         .fetch_all(pool)
         .await
-        .map_err(|e| ServerFnError::new(format!("Failed to fetch assignable project users: {e}")))?;
+        .map_err(|e| {
+            ServerFnError::new(format!("Failed to fetch assignable project users: {e}"))
+        })?;
 
         Ok(users)
     } else {
-        let users = sqlx::query_as::<_, User>(
-            "SELECT id, name, email FROM \"user\" ORDER BY name ASC",
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to fetch users: {e}")))?;
+        let users =
+            sqlx::query_as::<_, User>("SELECT id, name, email FROM \"user\" ORDER BY name ASC")
+                .fetch_all(pool)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Failed to fetch users: {e}")))?;
 
         Ok(users)
     }
@@ -358,7 +368,9 @@ pub async fn request_project_leadership_transfer(
         .map_err(|e| ServerFnError::new(format!("Project not found: {e}")))?;
 
     if leader_id != user.id {
-        return Err(ServerFnError::new("Only current leader can initiate transfer."));
+        return Err(ServerFnError::new(
+            "Only current leader can initiate transfer.",
+        ));
     }
 
     sqlx::query(
@@ -394,7 +406,9 @@ pub async fn respond_project_leadership_transfer(
     .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     if target.map(|(t,)| t) != Some(user.id) {
-        return Err(ServerFnError::new("No pending leadership transfer for you."));
+        return Err(ServerFnError::new(
+            "No pending leadership transfer for you.",
+        ));
     }
 
     let mut tx = pool
@@ -434,7 +448,14 @@ pub async fn affiliate_organization_with_project(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_project_perm(pool, project_id, user.id, 32, "Only project admins can affiliate organizations.").await?;
+    ensure_project_perm(
+        pool,
+        project_id,
+        user.id,
+        32,
+        "Only project admins can affiliate organizations.",
+    )
+    .await?;
 
     let rel = relationship_type.trim().to_lowercase();
     if !["owner", "partner", "contractor", "auditor"].contains(&rel.as_str()) {
@@ -479,11 +500,12 @@ pub async fn remove_organization_from_project(
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
-    let gov_id: Option<i64> = sqlx::query_scalar("SELECT governing_user_id FROM organization WHERE id = $1")
-        .bind(organization_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+    let gov_id: Option<i64> =
+        sqlx::query_scalar("SELECT governing_user_id FROM organization WHERE id = $1")
+            .bind(organization_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     if leader_id != Some(user.id) && gov_id != Some(user.id) {
         return Err(ServerFnError::new(
@@ -577,7 +599,9 @@ pub async fn get_project_organizations(
     let pool = get_db().await;
 
     if !can_view_project(pool, project_id, user.id).await? {
-        return Err(ServerFnError::new("You do not have permission to view this project."));
+        return Err(ServerFnError::new(
+            "You do not have permission to view this project.",
+        ));
     }
 
     let orgs = sqlx::query_as::<_, ProjectOrganization>(
@@ -606,7 +630,13 @@ pub async fn set_org_role_project_access(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can configure project role mappings.").await?;
+    ensure_org_admin(
+        pool,
+        organization_id,
+        user.id,
+        "Only organization admins can configure project role mappings.",
+    )
+    .await?;
 
     let p_role = project_role.trim().to_lowercase();
     let o_role = org_role.trim().to_string();
@@ -656,7 +686,9 @@ pub async fn revoke_org_role_project_access(
     .unwrap_or(false);
 
     if !is_authorized {
-        return Err(ServerFnError::new("Unauthorized to revoke role mapping rule."));
+        return Err(ServerFnError::new(
+            "Unauthorized to revoke role mapping rule.",
+        ));
     }
 
     #[derive(sqlx::FromRow)]
@@ -713,11 +745,12 @@ pub async fn revoke_org_role_project_access(
 
     for imp in &impacts {
         if imp.status == "in_progress" {
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
-                .bind(imp.task_id)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
+                    .bind(imp.task_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
             if count <= 1 {
                 sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
                     .bind(imp.task_id)
@@ -759,7 +792,9 @@ pub async fn get_project_org_role_access(
     let pool = get_db().await;
 
     if !can_view_project(pool, project_id, user.id).await? {
-        return Err(ServerFnError::new("You do not have permission to view this project."));
+        return Err(ServerFnError::new(
+            "You do not have permission to view this project.",
+        ));
     }
 
     let rules = sqlx::query_as::<_, ProjectOrgRoleRule>(
@@ -980,5 +1015,3 @@ pub async fn get_project_invite_directory(
         candidates,
     })
 }
-
-

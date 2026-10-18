@@ -1,9 +1,9 @@
 #[cfg(feature = "server")]
+use crate::backend::crypto::hash_password;
+#[cfg(feature = "server")]
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 #[cfg(feature = "server")]
 use std::str::FromStr;
-#[cfg(feature = "server")]
-use crate::backend::crypto::hash_password;
 
 #[cfg(feature = "server")]
 pub fn load_env_files() {
@@ -35,7 +35,8 @@ pub fn resolve_database_url() -> String {
         }
     }
     let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "flowtask".to_string());
-    let password = std::env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "flowtask_dev_password".to_string());
+    let password =
+        std::env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "flowtask_dev_password".to_string());
     let host = std::env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
     let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
     let db = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "flowtask_db".to_string());
@@ -69,8 +70,7 @@ fn set_cached_test_pool(pool: &'static sqlx::PgPool) {
 #[cfg(all(feature = "server", not(test)))]
 async fn connect_pg_pool(max_connections: u32) -> sqlx::PgPool {
     let url = resolve_database_url();
-    let options = PgConnectOptions::from_str(&url)
-        .expect("Invalid PostgreSQL DATABASE_URL");
+    let options = PgConnectOptions::from_str(&url).expect("Invalid PostgreSQL DATABASE_URL");
 
     PgPoolOptions::new()
         .max_connections(max_connections)
@@ -84,7 +84,9 @@ async fn connect_pg_pool(max_connections: u32) -> sqlx::PgPool {
 pub async fn get_db() -> &'static sqlx::PgPool {
     POOL.get_or_init(|| async {
         let pool = connect_pg_pool(10).await;
-        init_db(&pool).await.expect("Failed to initialize PostgreSQL schema");
+        init_db(&pool)
+            .await
+            .expect("Failed to initialize PostgreSQL schema");
         pool
     })
     .await
@@ -124,8 +126,7 @@ pub async fn get_db() -> &'static sqlx::PgPool {
 
     let idx = TEST_SCHEMA_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let schema = format!("test_s_{}_{}", std::process::id(), idx);
-    let options = PgConnectOptions::from_str(&url)
-        .expect("Invalid PostgreSQL DATABASE_URL");
+    let options = PgConnectOptions::from_str(&url).expect("Invalid PostgreSQL DATABASE_URL");
 
     let schema_for_hook = schema.clone();
     let pool = PgPoolOptions::new()
@@ -135,8 +136,10 @@ pub async fn get_db() -> &'static sqlx::PgPool {
             let s = schema_for_hook.clone();
             Box::pin(async move {
                 use sqlx::Executor;
-                conn.execute(format!("CREATE SCHEMA IF NOT EXISTS {s}; SET search_path TO {s};").as_str())
-                    .await?;
+                conn.execute(
+                    format!("CREATE SCHEMA IF NOT EXISTS {s}; SET search_path TO {s};").as_str(),
+                )
+                .await?;
                 Ok(())
             })
         })
@@ -156,14 +159,20 @@ pub async fn get_db() -> &'static sqlx::PgPool {
 #[cfg(all(feature = "server", not(test)))]
 async fn init_db(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut conn = pool.acquire().await?;
-    sqlx::query("SELECT pg_advisory_lock(74839201)").execute(&mut *conn).await?;
+    sqlx::query("SELECT pg_advisory_lock(74839201)")
+        .execute(&mut *conn)
+        .await?;
     let res = init_db_inner(pool).await;
-    let _ = sqlx::query("SELECT pg_advisory_unlock(74839201)").execute(&mut *conn).await;
+    let _ = sqlx::query("SELECT pg_advisory_unlock(74839201)")
+        .execute(&mut *conn)
+        .await;
     res
 }
 
 #[cfg(feature = "server")]
-async fn init_db_inner(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn init_db_inner(
+    pool: &sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     sqlx::migrate!("./migrations").run(pool).await?;
 
     // Seed default password ('password123') for seeded demo users

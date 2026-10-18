@@ -1,6 +1,6 @@
-use dioxus::prelude::*;
-use crate::Route;
 use crate::types::Organization;
+use crate::Route;
+use dioxus::prelude::*;
 
 #[component]
 pub fn DashboardOrganizations(
@@ -21,37 +21,46 @@ pub fn DashboardOrganizations(
             } else {
                 div { style: "display: flex; flex-direction: column; gap: 12px;",
                     for org in organizations {
-                        {
-                            let is_governor = current_user_id == Some(org.governing_user_id);
-                            let oid = org.id;
-                            rsx! {
-                                div { key: "{oid}", class: "inbox-item",
-                                    div { class: "inbox-item-header",
-                                        div { style: "display: flex; gap: 8px; align-items: center;",
-                                            Link {
-                                                to: Route::OrganizationDashboardPage { organization_id: oid },
-                                                class: "inbox-item-title",
-                                                style: "text-decoration: none; color: inherit; font-weight: var(--font-weight-bold);",
-                                                "{org.name}"
-                                            }
-                                            span { class: "inbox-item-meta", "@{org.slug}" }
-                                        }
-                                        Link {
-                                            to: Route::OrganizationDashboardPage { organization_id: oid },
-                                            class: "btn-action-sm",
-                                            style: "text-decoration: none;",
-                                            if is_governor { "⚙ Manage" } else { "View Dashboard →" }
-                                        }
-                                    }
-                                    div { class: "inbox-item-msg",
-                                        "Governed by: "
-                                        strong { "{org.governing_user_name}" }
-                                    }
-                                }
-                            }
+                        OrganizationDashboardRow {
+                            key: "{org.id}",
+                            org,
+                            current_user_id,
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Item representing a single organization on the user's dashboard.
+#[component]
+fn OrganizationDashboardRow(org: Organization, current_user_id: Option<i64>) -> Element {
+    let is_governor = current_user_id == Some(org.governing_user_id);
+    let oid = org.id;
+
+    rsx! {
+        div { class: "inbox-item",
+            div { class: "inbox-item-header",
+                div { style: "display: flex; gap: 8px; align-items: center;",
+                    Link {
+                        to: Route::OrganizationDashboardPage { organization_id: oid },
+                        class: "inbox-item-title",
+                        style: "text-decoration: none; color: inherit; font-weight: var(--font-weight-bold);",
+                        "{org.name}"
+                    }
+                    span { class: "inbox-item-meta", "@{org.slug}" }
+                }
+                Link {
+                    to: Route::OrganizationDashboardPage { organization_id: oid },
+                    class: "btn-action-sm",
+                    style: "text-decoration: none;",
+                    if is_governor { "⚙ Manage" } else { "View Dashboard →" }
+                }
+            }
+            div { class: "inbox-item-msg",
+                "Governed by: "
+                strong { "{org.governing_user_name}" }
             }
         }
     }

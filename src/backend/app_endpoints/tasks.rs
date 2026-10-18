@@ -1,12 +1,12 @@
-use dioxus::prelude::*;
 use crate::types::{
-    ProjectWorkflowTransitionDto, Task, TaskMessage, TaskStatus, WorkflowStatusDto,
+    BoardSnapshot, ProjectWorkflowTransitionDto, Task, TaskMessage, TaskStatus, WorkflowStatusDto,
 };
+use dioxus::prelude::*;
 
 #[cfg(feature = "server")]
-use chrono::{DateTime, Utc};
+use crate::types::{has_perm, Permission, ProjectViewKind, User};
 #[cfg(feature = "server")]
-use crate::types::{has_perm, Permission, User};
+use chrono::{DateTime, Utc};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -32,10 +32,7 @@ pub(crate) struct RawTask {
 }
 
 #[server]
-pub async fn suggest_task(
-    task_title: String,
-    description: String,
-) -> Result<(), ServerFnError> {
+pub async fn suggest_task(task_title: String, description: String) -> Result<(), ServerFnError> {
     suggest_task_for_project(1, task_title, description).await
 }
 
@@ -140,12 +137,14 @@ pub async fn assign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError
         }
     }
 
-    sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-        .bind(task_id)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to assign task: {e}")))?;
+    sqlx::query(
+        "INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(task_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to assign task: {e}")))?;
 
     Ok(())
 }
@@ -196,10 +195,7 @@ pub async fn unassign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnErr
 }
 
 #[server]
-pub async fn get_my_tasks(
-    after_id: Option<i64>,
-    amount: u64,
-) -> Result<Vec<Task>, ServerFnError> {
+pub async fn get_my_tasks(after_id: Option<i64>, amount: u64) -> Result<Vec<Task>, ServerFnError> {
     let user = get_auth_user().await?;
     let last_id = after_id.unwrap_or(0);
     let pool = get_db().await;
@@ -250,7 +246,11 @@ pub async fn get_my_tasks(
          INNER JOIN \"user\" u ON assignments.assigned_to = u.id 
          WHERE assignments.task_id IN ({}) 
          ORDER BY u.name ASC",
-        task_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+        task_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     );
 
     #[derive(sqlx::FromRow)]
@@ -286,7 +286,9 @@ pub async fn get_my_tasks(
                 project_name: raw.project_name.unwrap_or_else(|| "Standalone".to_string()),
                 title: raw.title,
                 author: raw.author,
-                author_name: raw.author_name.unwrap_or_else(|| "Deleted User".to_string()),
+                author_name: raw
+                    .author_name
+                    .unwrap_or_else(|| "Deleted User".to_string()),
                 description: raw.description.unwrap_or_default(),
                 status: raw.status,
                 workflow_status_id: raw.workflow_status_id,
@@ -303,10 +305,7 @@ pub async fn get_my_tasks(
 }
 
 #[server]
-pub async fn get_all_tasks(
-    after_id: Option<i64>,
-    amount: u64,
-) -> Result<Vec<Task>, ServerFnError> {
+pub async fn get_all_tasks(after_id: Option<i64>, amount: u64) -> Result<Vec<Task>, ServerFnError> {
     get_project_tasks(1, after_id, amount).await
 }
 
@@ -373,7 +372,11 @@ pub async fn get_project_tasks(
          INNER JOIN \"user\" u ON assignments.assigned_to = u.id 
          WHERE assignments.task_id IN ({}) 
          ORDER BY u.name ASC",
-        task_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+        task_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     );
 
     #[derive(sqlx::FromRow)]
@@ -409,7 +412,9 @@ pub async fn get_project_tasks(
                 project_name: raw.project_name.unwrap_or_else(|| "Standalone".to_string()),
                 title: raw.title,
                 author: raw.author,
-                author_name: raw.author_name.unwrap_or_else(|| "Deleted User".to_string()),
+                author_name: raw
+                    .author_name
+                    .unwrap_or_else(|| "Deleted User".to_string()),
                 description: raw.description.unwrap_or_default(),
                 status: raw.status,
                 workflow_status_id: raw.workflow_status_id,
@@ -488,7 +493,9 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
         project_name: raw.project_name.unwrap_or_else(|| "Standalone".to_string()),
         title: raw.title,
         author: raw.author,
-        author_name: raw.author_name.unwrap_or_else(|| "Deleted User".to_string()),
+        author_name: raw
+            .author_name
+            .unwrap_or_else(|| "Deleted User".to_string()),
         description: raw.description.unwrap_or_default(),
         status: raw.status,
         workflow_status_id: raw.workflow_status_id,
@@ -515,13 +522,12 @@ pub async fn update_task(
         .await
         .map_err(|e| ServerFnError::new(format!("Transaction failed: {e}")))?;
 
-    let task_meta: Option<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT project_id, author FROM task WHERE id = $1",
-    )
-    .bind(task_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+    let task_meta: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT project_id, author FROM task WHERE id = $1")
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     let (project_id, author) = match task_meta {
         Some(m) => m,
@@ -625,12 +631,14 @@ pub async fn update_task(
     }
 
     for user_id in &assignee_ids {
-        sqlx::query("INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-            .bind(task_id)
-            .bind(*user_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| ServerFnError::new(format!("Failed to add assignee: {e}")))?;
+        sqlx::query(
+            "INSERT INTO assignments (task_id, assigned_to) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(task_id)
+        .bind(*user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Failed to add assignee: {e}")))?;
     }
 
     if assignee_ids.is_empty() {
@@ -675,13 +683,12 @@ pub async fn delete_task(task_id: i64) -> Result<(), ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let task_meta: Option<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT project_id, author FROM task WHERE id = $1",
-    )
-    .bind(task_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+    let task_meta: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT project_id, author FROM task WHERE id = $1")
+            .bind(task_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     let (project_id, author) = match task_meta {
         Some(m) => m,
@@ -731,13 +738,12 @@ pub async fn set_task_status(task_id: u64, status: TaskStatus) -> Result<(), Ser
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let task_meta: Option<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT project_id, author FROM task WHERE id = $1",
-    )
-    .bind(task_id as i64)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+    let task_meta: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT project_id, author FROM task WHERE id = $1")
+            .bind(task_id as i64)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     let (project_id, author) = match task_meta {
         Some(m) => m,
@@ -772,12 +778,13 @@ pub async fn set_task_status(task_id: u64, status: TaskStatus) -> Result<(), Ser
         };
 
         // Transition guard check if project has role-gated transitions defined
-        let current_ws_id: Option<i64> = sqlx::query_scalar("SELECT workflow_status_id FROM task WHERE id = $1")
-            .bind(task_id as i64)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
-            .flatten();
+        let current_ws_id: Option<i64> =
+            sqlx::query_scalar("SELECT workflow_status_id FROM task WHERE id = $1")
+                .bind(task_id as i64)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
+                .flatten();
 
         let target_ws_id: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM project_workflow_status
@@ -878,13 +885,12 @@ pub async fn move_task_workflow_status(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let task_meta: Option<(i64, Option<i64>, Option<i64>)> = sqlx::query_as(
-        "SELECT project_id, author, workflow_status_id FROM task WHERE id = $1",
-    )
-    .bind(task_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+    let task_meta: Option<(i64, Option<i64>, Option<i64>)> =
+        sqlx::query_as("SELECT project_id, author, workflow_status_id FROM task WHERE id = $1")
+            .bind(task_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     let (project_id, _author, current_ws_id) = match task_meta {
         Some(m) => m,
@@ -1080,17 +1086,89 @@ pub async fn get_project_workflow_transitions(
 }
 
 #[server]
+pub async fn get_project_board_snapshot(project_id: i64) -> Result<BoardSnapshot, ServerFnError> {
+    let user = get_auth_user().await?;
+    let pool = get_db().await;
+
+    let project_row: Option<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT p.name,
+                p.leader_id,
+                pm.permissions_mask
+         FROM project p
+         LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
+         WHERE p.id = $2",
+    )
+    .bind(user.id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+
+    let (project_name, leader_id, member_mask) = match project_row {
+        Some(r) => r,
+        None => return Err(ServerFnError::new("Project not found.")),
+    };
+
+    let effective_mask = if leader_id == user.id {
+        Permission::ADMIN_DEFAULT.as_i64()
+    } else {
+        member_mask.unwrap_or(0)
+    };
+
+    if !has_perm(effective_mask, Permission::READ) {
+        return Err(ServerFnError::new(
+            "You do not have permission to view this project.",
+        ));
+    }
+
+    let statuses = sqlx::query_as::<_, WorkflowStatusDto>(
+        "SELECT pws.id, pws.project_id, pws.name, pws.category, pws.badge_variant,
+                pws.position, pws.wip_limit, pws.is_initial, pws.allows_assignment,
+                pws.requires_assignee,
+                COUNT(t.id)::bigint AS task_count,
+                (pws.wip_limit IS NOT NULL AND COUNT(t.id) > pws.wip_limit) AS wip_exceeded,
+                pws.created_at
+         FROM project_workflow_status pws
+         LEFT JOIN task t ON t.project_id = pws.project_id AND t.workflow_status_id = pws.id
+         WHERE pws.project_id = $1
+         GROUP BY pws.id
+         ORDER BY pws.position ASC, pws.id ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to fetch workflow statuses: {e}")))?;
+
+    let tasks = get_project_tasks(project_id, None, 1000).await?;
+
+    Ok(BoardSnapshot {
+        project_id,
+        project_name,
+        enabled_views: vec![
+            ProjectViewKind::KanbanClassic,
+            ProjectViewKind::KanbanSwimlanes,
+            ProjectViewKind::List,
+            ProjectViewKind::Gantt,
+        ],
+        default_view: ProjectViewKind::KanbanClassic,
+        caller_permissions: effective_mask,
+        statuses,
+        tasks,
+        dependencies: Vec::new(),
+    })
+}
+
+#[server]
 pub async fn get_task_messages(task_id: i64) -> Result<Vec<TaskMessage>, ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let project_id: Option<Option<i64>> = sqlx::query_scalar(
-        "SELECT project_id FROM task WHERE id = $1",
-    )
-    .bind(task_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
+    let project_id: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT project_id FROM task WHERE id = $1")
+            .bind(task_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     if let Some(Some(pid)) = project_id {
         let can_read: bool = sqlx::query_scalar(

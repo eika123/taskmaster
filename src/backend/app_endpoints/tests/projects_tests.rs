@@ -119,7 +119,10 @@ async fn test_project_leadership_and_task_messages() {
         .await
         .unwrap();
 
-        assert_eq!(transition_with_assignees_result.status, TaskStatus::InProgress);
+        assert_eq!(
+            transition_with_assignees_result.status,
+            TaskStatus::InProgress
+        );
         assert_eq!(transition_with_assignees_result.assignees.len(), 1);
         assert_eq!(transition_with_assignees_result.assignees[0].id, 2);
     })
@@ -169,7 +172,10 @@ async fn test_project_invitation_flow() {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert!(invite_exists, "Invitation should exist in project_invitation table");
+    assert!(
+        invite_exists,
+        "Invitation should exist in project_invitation table"
+    );
 
     // Step 3: Accept invitation - insert into project_members and remove pending invite
     sqlx::query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1, 2, 'member')")
@@ -191,5 +197,8 @@ async fn test_project_invitation_flow() {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert!(is_confirmed_member, "User should be an active project member after accepting invitation");
+    assert!(
+        is_confirmed_member,
+        "User should be an active project member after accepting invitation"
+    );
 }

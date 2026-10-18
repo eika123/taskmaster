@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::types::User;
+use dioxus::prelude::*;
 
 #[component]
 pub fn AssigneeBadgeList(
@@ -79,30 +79,35 @@ pub fn AssigneeSearchDropdown(
             if *is_dropdown_open.read() && !filtered_candidates.is_empty() {
                 ul { class: "assignee-dropdown", role: "listbox",
                     for candidate in filtered_candidates {
-                        {
-                            let candidate_id = candidate.id;
-                            let candidate_name = candidate.name.clone();
-                            let candidate_email = candidate.email.clone();
-                            rsx! {
-                                li {
-                                    key: "{candidate_id}",
-                                    class: "assignee-dropdown-item",
-                                    role: "option",
-                                    onclick: move |_| {
-                                        if let Some(cb) = on_assign {
-                                            cb.call(candidate_id);
-                                        }
-                                        search_query.write().clear();
-                                        is_dropdown_open.set(false);
-                                    },
-                                    div { class: "dropdown-user-name", "{candidate_name}" }
-                                    div { class: "dropdown-user-email", "{candidate_email}" }
+                        DropdownCandidateItem {
+                            candidate,
+                            on_select: move |candidate_id| {
+                                if let Some(cb) = on_assign {
+                                    cb.call(candidate_id);
                                 }
-                            }
+                                search_query.write().clear();
+                                is_dropdown_open.set(false);
+                            },
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/// An individual selectable candidate in the assignee dropdown menu.
+#[component]
+fn DropdownCandidateItem(candidate: User, on_select: EventHandler<i64>) -> Element {
+    let candidate_id = candidate.id;
+    rsx! {
+        li {
+            key: "{candidate_id}",
+            class: "assignee-dropdown-item",
+            role: "option",
+            onclick: move |_| on_select.call(candidate_id),
+            div { class: "dropdown-user-name", "{candidate.name}" }
+            div { class: "dropdown-user-email", "{candidate.email}" }
         }
     }
 }

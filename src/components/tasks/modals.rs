@@ -1,6 +1,7 @@
-use dioxus::prelude::*;
 use crate::backend::app_endpoints::suggest_task_for_project;
+use dioxus::prelude::*;
 
+/// Inline modal for creating a task directly on project board or My Tasks page.
 #[component]
 pub fn InlineCreateTaskModal(
     project_id: Option<i64>,
@@ -47,35 +48,61 @@ pub fn InlineCreateTaskModal(
                 div { class: "task-detail-error", "{err}" }
             }
             div { style: "display: flex; flex-direction: column; gap: 12px;",
-                input {
-                    class: "task-edit-title-input",
-                    placeholder: "Task Title (e.g. Implement OAuth Flow)",
-                    value: "{new_task_title}",
-                    oninput: move |e| new_task_title.set(e.value()),
+                InlineTaskInputs {
+                    title: new_task_title,
+                    desc: new_task_desc,
                 }
-                textarea {
-                    class: "task-edit-description-textarea",
-                    placeholder: "Describe requirements, criteria, or context...",
-                    value: "{new_task_desc}",
-                    oninput: move |e| new_task_desc.set(e.value()),
-                }
-                div { style: "display: flex; gap: 8px; justify-content: flex-end;",
-                    button {
-                        r#type: "button",
-                        class: "btn-task-cancel",
-                        onclick: move |_| on_close.call(()),
-                        "Cancel"
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn-task-save",
-                        disabled: *is_creating_task.read(),
-                        onclick: handle_create_task,
-                        if *is_creating_task.read() { "Creating..." } else { "Create Task" }
-                    }
+                InlineTaskActions {
+                    is_creating: *is_creating_task.read(),
+                    on_close,
+                    on_submit: handle_create_task,
                 }
             }
         }
     }
 }
 
+/// Text input and textarea for task title and description.
+#[component]
+fn InlineTaskInputs(mut title: Signal<String>, mut desc: Signal<String>) -> Element {
+    rsx! {
+        input {
+            class: "task-edit-title-input",
+            placeholder: "Task Title (e.g. Implement OAuth Flow)",
+            value: "{title}",
+            oninput: move |e| title.set(e.value()),
+        }
+        textarea {
+            class: "task-edit-description-textarea",
+            placeholder: "Describe requirements, criteria, or context...",
+            value: "{desc}",
+            oninput: move |e| desc.set(e.value()),
+        }
+    }
+}
+
+/// Action buttons for the inline task creation form.
+#[component]
+fn InlineTaskActions(
+    is_creating: bool,
+    on_close: EventHandler<()>,
+    on_submit: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { style: "display: flex; gap: 8px; justify-content: flex-end;",
+            button {
+                r#type: "button",
+                class: "btn-task-cancel",
+                onclick: move |_| on_close.call(()),
+                "Cancel"
+            }
+            button {
+                r#type: "button",
+                class: "btn-task-save",
+                disabled: is_creating,
+                onclick: move |_| on_submit.call(()),
+                if is_creating { "Creating..." } else { "Create Task" }
+            }
+        }
+    }
+}

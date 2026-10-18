@@ -1,9 +1,9 @@
-use dioxus::prelude::*;
-use crate::types::{OrganizationMember, User};
 use crate::backend::app_endpoints::{
     assign_organization_member_role, create_organization_role, create_project,
     invite_user_to_organization, request_organization_governance_transfer,
 };
+use crate::types::{OrganizationMember, User};
+use dioxus::prelude::*;
 
 #[component]
 pub fn InviteOrgMemberModal(
@@ -71,63 +71,93 @@ pub fn InviteOrgMemberModal(
                     if let Some(err) = &*error_msg.read() {
                         div { class: "task-detail-error", "{err}" }
                     }
-                    div { class: "form-group",
-                        label { class: "form-label", "Select User" }
-                        select {
-                            class: "task-status-select",
-                            onchange: move |e| {
-                                if let Ok(id) = e.value().parse::<i64>() {
-                                    selected_user_id.set(Some(id));
-                                } else {
-                                    selected_user_id.set(None);
-                                }
-                            },
-                            option { value: "", "-- Choose user to invite --" }
-                            for u in &all_users {
-                                option { value: "{u.id}", "{u.name} ({u.email})" }
-                            }
-                        }
-                    }
-                    div { class: "form-group",
-                        label { class: "form-label", "Initial Base Role" }
-                        select {
-                            class: "task-status-select",
-                            value: "{selected_role}",
-                            onchange: move |e| selected_role.set(e.value()),
-                            option { value: "member", "Member (Default)" }
-                            option { value: "admin", "Admin" }
-                            for r in &available_roles {
-                                if r != "admin" && r != "member" {
-                                    option { value: "{r}", "{r}" }
-                                }
-                            }
-                        }
-                    }
-                    div { class: "form-group",
-                        label { class: "form-label", "Invitation Note (Optional)" }
-                        textarea {
-                            class: "task-message-input",
-                            placeholder: "Welcome note or department information...",
-                            value: "{message}",
-                            oninput: move |e| message.set(e.value()),
-                        }
-                    }
-                    div { class: "overlay-footer",
-                        button {
-                            r#type: "button",
-                            class: "btn-task-cancel",
-                            onclick: move |_| on_close.call(()),
-                            "Cancel"
-                        }
-                        button {
-                            r#type: "button",
-                            class: "btn-task-save",
-                            disabled: *is_submitting.read(),
-                            onclick: handle_submit,
-                            if *is_submitting.read() { "Sending..." } else { "Send Invitation" }
-                        }
+                    InviteOrgMemberForm {
+                        all_users,
+                        available_roles,
+                        selected_role: selected_role.read().clone(),
+                        message: message.read().clone(),
+                        is_submitting: *is_submitting.read(),
+                        on_user_change: move |uid| selected_user_id.set(uid),
+                        on_role_change: move |r| selected_role.set(r),
+                        on_message_change: move |m| message.set(m),
+                        on_cancel: move |_| on_close.call(()),
+                        on_submit: handle_submit,
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Form controls for selecting a user, initial base role, and note to invite to an organization.
+#[component]
+fn InviteOrgMemberForm(
+    all_users: Vec<User>,
+    available_roles: Vec<String>,
+    selected_role: String,
+    message: String,
+    is_submitting: bool,
+    on_user_change: EventHandler<Option<i64>>,
+    on_role_change: EventHandler<String>,
+    on_message_change: EventHandler<String>,
+    on_cancel: EventHandler<()>,
+    on_submit: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "form-group",
+            label { class: "form-label", "Select User" }
+            select {
+                class: "task-status-select",
+                onchange: move |e| {
+                    if let Ok(id) = e.value().parse::<i64>() {
+                        on_user_change.call(Some(id));
+                    } else {
+                        on_user_change.call(None);
+                    }
+                },
+                option { value: "", "-- Choose user to invite --" }
+                for u in &all_users {
+                    option { value: "{u.id}", "{u.name} ({u.email})" }
+                }
+            }
+        }
+        div { class: "form-group",
+            label { class: "form-label", "Initial Base Role" }
+            select {
+                class: "task-status-select",
+                value: "{selected_role}",
+                onchange: move |e| on_role_change.call(e.value()),
+                option { value: "member", "Member (Default)" }
+                option { value: "admin", "Admin" }
+                for r in &available_roles {
+                    if r != "admin" && r != "member" {
+                        option { value: "{r}", "{r}" }
+                    }
+                }
+            }
+        }
+        div { class: "form-group",
+            label { class: "form-label", "Invitation Note (Optional)" }
+            textarea {
+                class: "task-message-input",
+                placeholder: "Welcome note or department information...",
+                value: "{message}",
+                oninput: move |e| on_message_change.call(e.value()),
+            }
+        }
+        div { class: "overlay-footer",
+            button {
+                r#type: "button",
+                class: "btn-task-cancel",
+                onclick: move |_| on_cancel.call(()),
+                "Cancel"
+            }
+            button {
+                r#type: "button",
+                class: "btn-task-save",
+                disabled: is_submitting,
+                onclick: move |_| on_submit.call(()),
+                if is_submitting { "Sending..." } else { "Send Invitation" }
             }
         }
     }
@@ -232,7 +262,10 @@ pub fn AssignMemberRoleModal(
     on_assigned: EventHandler<()>,
 ) -> Element {
     let mut selected_role = use_signal(|| {
-        available_roles.first().cloned().unwrap_or_else(|| "member".to_string())
+        available_roles
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "member".to_string())
     });
     let mut error_msg = use_signal(|| Option::<String>::None);
     let mut is_submitting = use_signal(|| false);
@@ -642,4 +675,3 @@ pub fn CreateOrgProjectModal(
         }
     }
 }
-

@@ -1,8 +1,8 @@
-use dioxus::prelude::*;
 use crate::types::{
-    Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation,
-    OrgRoleRuleItem,
+    OrgProjectAffiliation, OrgRoleRuleItem, Organization, OrganizationMember,
+    OrganizationPendingInvite,
 };
+use dioxus::prelude::*;
 
 #[cfg(feature = "server")]
 use crate::types::{has_perm, Permission};
@@ -95,7 +95,10 @@ pub async fn create_organization(
 }
 
 #[server]
-pub async fn delete_organization(organization_id: i64, confirmation: String) -> Result<(), ServerFnError> {
+pub async fn delete_organization(
+    organization_id: i64,
+    confirmation: String,
+) -> Result<(), ServerFnError> {
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
@@ -245,7 +248,12 @@ pub async fn remove_organization_member(
     if !impacts.is_empty() && !confirm_active_tasks_warning {
         let details: Vec<String> = impacts
             .iter()
-            .map(|r| format!("Project '{}' task '{}' [{}]", r.project_name, r.task_title, r.status))
+            .map(|r| {
+                format!(
+                    "Project '{}' task '{}' [{}]",
+                    r.project_name, r.task_title, r.status
+                )
+            })
             .collect();
         return Err(ServerFnError::new(format!(
             "Active task impact warning: Removing this member will revoke task privileges on active tasks: {}. Confirm to proceed or hand over tasks first.",
@@ -261,11 +269,12 @@ pub async fn remove_organization_member(
     // If confirmed, unassign from affected non-finished tasks so DB constraints don't fail
     for impact in &impacts {
         if impact.status == "in_progress" {
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
-                .bind(impact.task_id)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
+                    .bind(impact.task_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
             if count <= 1 {
                 sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
                     .bind(impact.task_id)
@@ -399,14 +408,17 @@ pub async fn request_organization_governance_transfer(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    let gov_id: i64 = sqlx::query_scalar("SELECT governing_user_id FROM organization WHERE id = $1")
-        .bind(organization_id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Organization not found: {e}")))?;
+    let gov_id: i64 =
+        sqlx::query_scalar("SELECT governing_user_id FROM organization WHERE id = $1")
+            .bind(organization_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Organization not found: {e}")))?;
 
     if gov_id != user.id {
-        return Err(ServerFnError::new("Only current governor can initiate transfer."));
+        return Err(ServerFnError::new(
+            "Only current governor can initiate transfer.",
+        ));
     }
 
     sqlx::query(
@@ -425,7 +437,6 @@ pub async fn request_organization_governance_transfer(
     Ok(())
 }
 
-
 #[server]
 pub async fn respond_to_organization_governance_transfer_request(
     organization_id: i64,
@@ -443,7 +454,9 @@ pub async fn respond_to_organization_governance_transfer_request(
     .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?;
 
     if target.map(|(t,)| t) != Some(user.id) {
-        return Err(ServerFnError::new("No pending governance transfer for you."));
+        return Err(ServerFnError::new(
+            "No pending governance transfer for you.",
+        ));
     }
 
     let mut tx = pool
@@ -482,7 +495,13 @@ pub async fn assign_organization_member_role(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can assign roles.").await?;
+    ensure_org_admin(
+        pool,
+        organization_id,
+        user.id,
+        "Only organization admins can assign roles.",
+    )
+    .await?;
 
     let role_clean = role.trim();
     if role_clean.is_empty() {
@@ -514,7 +533,13 @@ pub async fn revoke_organization_member_role(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can revoke roles.").await?;
+    ensure_org_admin(
+        pool,
+        organization_id,
+        user.id,
+        "Only organization admins can revoke roles.",
+    )
+    .await?;
 
     #[derive(sqlx::FromRow)]
     struct ImpactRow {
@@ -554,7 +579,12 @@ pub async fn revoke_organization_member_role(
     if !impacts.is_empty() && !confirm_active_tasks_warning {
         let details: Vec<String> = impacts
             .iter()
-            .map(|r| format!("Project '{}' task '{}' [{}]", r.project_name, r.task_title, r.status))
+            .map(|r| {
+                format!(
+                    "Project '{}' task '{}' [{}]",
+                    r.project_name, r.task_title, r.status
+                )
+            })
             .collect();
         return Err(ServerFnError::new(format!(
             "Active task impact warning: Revoking role '{}' will revoke task privileges on active tasks: {}. Confirm with confirm_active_tasks_warning=true or hand over tasks first.",
@@ -569,11 +599,12 @@ pub async fn revoke_organization_member_role(
 
     for imp in &impacts {
         if imp.status == "in_progress" {
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
-                .bind(imp.task_id)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM assignments WHERE task_id = $1")
+                    .bind(imp.task_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Failed to count assignees: {e}")))?;
             if count <= 1 {
                 sqlx::query("UPDATE task SET status = 'accepted' WHERE id = $1")
                     .bind(imp.task_id)
@@ -631,7 +662,13 @@ pub async fn create_organization_role(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can create custom roles.").await?;
+    ensure_org_admin(
+        pool,
+        organization_id,
+        user.id,
+        "Only organization admins can create custom roles.",
+    )
+    .await?;
 
     let role_clean = role.trim().to_lowercase();
     if role_clean.is_empty() {
@@ -649,9 +686,7 @@ pub async fn create_organization_role(
 }
 
 #[server]
-pub async fn get_organization_roles(
-    organization_id: i64,
-) -> Result<Vec<String>, ServerFnError> {
+pub async fn get_organization_roles(organization_id: i64) -> Result<Vec<String>, ServerFnError> {
     let pool = get_db().await;
     let roles: Vec<String> = sqlx::query_scalar(
         "SELECT role FROM organization_role WHERE organization_id = $1 ORDER BY role ASC",
@@ -732,7 +767,9 @@ pub async fn get_organization_affiliated_projects(
         .into_iter()
         .map(|r| {
             let has_access = r.is_leader
-                || r.permissions_mask.map(|m| has_perm(m, Permission::READ)).unwrap_or(false)
+                || r.permissions_mask
+                    .map(|m| has_perm(m, Permission::READ))
+                    .unwrap_or(false)
                 || is_org_governor_or_admin;
             let user_role = if r.is_leader {
                 Some("Leader".to_string())
@@ -760,7 +797,13 @@ pub async fn get_organization_role_rules(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_org_admin(pool, organization_id, user.id, "You do not have permission to view organization role rules.").await?;
+    ensure_org_admin(
+        pool,
+        organization_id,
+        user.id,
+        "You do not have permission to view organization role rules.",
+    )
+    .await?;
 
     let rules = sqlx::query_as::<_, OrgRoleRuleItem>(
         "SELECT pora.project_id, p.name AS project_name, pora.organization_id, pora.org_role, pora.project_role
@@ -812,16 +855,22 @@ pub async fn cancel_organization_invitation(
     let user = get_auth_user().await?;
     let pool = get_db().await;
 
-    ensure_org_admin(pool, organization_id, user.id, "Only organization admins can cancel invitations.").await?;
+    ensure_org_admin(
+        pool,
+        organization_id,
+        user.id,
+        "Only organization admins can cancel invitations.",
+    )
+    .await?;
 
-    sqlx::query("DELETE FROM organization_invitation WHERE organization_id = $1 AND invited_user_id = $2")
-        .bind(organization_id)
-        .bind(invited_user_id)
-        .execute(pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to cancel invitation: {e}")))?;
+    sqlx::query(
+        "DELETE FROM organization_invitation WHERE organization_id = $1 AND invited_user_id = $2",
+    )
+    .bind(organization_id)
+    .bind(invited_user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| ServerFnError::new(format!("Failed to cancel invitation: {e}")))?;
 
     Ok(())
 }
-
-

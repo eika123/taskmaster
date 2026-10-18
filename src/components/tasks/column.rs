@@ -1,7 +1,8 @@
-use dioxus::prelude::*;
 use super::card::TaskCard;
 use crate::types::{Task, TaskStatus, User};
+use dioxus::prelude::*;
 
+/// Kanban column displaying tasks with a given status.
 #[component]
 pub fn TaskColumn(
     status: TaskStatus,
@@ -19,12 +20,10 @@ pub fn TaskColumn(
 
     rsx! {
         div { class: "task-column task-column-{status.as_str()}",
-            div { class: "task-column-header",
-                div { class: "task-column-title-group",
-                    span { class: "status-indicator status-indicator-{status.as_str()}" }
-                    h2 { class: "task-column-title", "{status_name}" }
-                }
-                span { class: "task-column-count", "{count}" }
+            TaskColumnHeader {
+                status,
+                status_name: status_name.clone(),
+                count,
             }
             div { class: "task-column-body",
                 if filtered_tasks.is_empty() {
@@ -53,3 +52,16 @@ pub fn TaskColumn(
     }
 }
 
+/// Header for a Kanban task column showing title indicator and task count.
+#[component]
+fn TaskColumnHeader(status: TaskStatus, status_name: String, count: usize) -> Element {
+    rsx! {
+        div { class: "task-column-header",
+            div { class: "task-column-title-group",
+                span { class: "status-indicator status-indicator-{status.as_str()}" }
+                h2 { class: "task-column-title", "{status_name}" }
+            }
+            span { class: "task-column-count", "{count}" }
+        }
+    }
+}

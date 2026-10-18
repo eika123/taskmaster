@@ -348,6 +348,148 @@ pub struct ProjectWorkflowTransitionDto {
     pub required_permission: i64,
 }
 
+/// Pluggable project view representation kinds supported by [`ProjectViewHost`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectViewKind {
+    /// Classic multi-column Kanban board with vertical status lanes.
+    KanbanClassic,
+    /// 2D Kanban matrix with horizontal assignee or category swimlanes across status columns.
+    KanbanSwimlanes,
+    /// Tabular list view with sortable columns, inline status badges, and assignee pills.
+    List,
+    /// Gantt chart and timeline view displaying start/due dates and task dependencies.
+    Gantt,
+}
+
+impl ProjectViewKind {
+    /// Canonical snake_case representation used in URL routing paths.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::KanbanClassic => "classic",
+            Self::KanbanSwimlanes => "swimlanes",
+            Self::List => "list",
+            Self::Gantt => "gantt",
+        }
+    }
+
+    /// User-friendly label for view switcher tabs and navigation.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::KanbanClassic => "Kanban Classic",
+            Self::KanbanSwimlanes => "Swimlanes",
+            Self::List => "List View",
+            Self::Gantt => "Gantt Chart",
+        }
+    }
+
+    /// Icon emoji representing this view in UI switchers.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::KanbanClassic => "📋",
+            Self::KanbanSwimlanes => "🏊",
+            Self::List => "📄",
+            Self::Gantt => "📊",
+        }
+    }
+
+    /// Returns all available project view kinds.
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::KanbanClassic,
+            Self::KanbanSwimlanes,
+            Self::List,
+            Self::Gantt,
+        ]
+    }
+}
+
+impl std::fmt::Display for ProjectViewKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ProjectViewKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "classic" | "kanban" | "kanban_classic" => Ok(Self::KanbanClassic),
+            "swimlanes" | "kanban_swimlanes" => Ok(Self::KanbanSwimlanes),
+            "list" => Ok(Self::List),
+            "gantt" => Ok(Self::Gantt),
+            other => Err(format!("Unknown project view kind: '{other}'")),
+        }
+    }
+}
+
+/// Semantic intent request emitted by frontend view components when dragging or moving a task.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TaskMoveRequest {
+    /// Identifier of the task being transitioned.
+    pub task_id: i64,
+    /// Destination workflow status column identifier.
+    pub target_workflow_status_id: i64,
+}
+
+/// Lightweight task dependency link representing a directed edge in the project DAG.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct TaskDependencyDto {
+    pub id: i64,
+    pub predecessor_task_id: i64,
+    pub successor_task_id: i64,
+    pub dependency_type: String,
+}
+
+/// Complete, pure projection contract for project board views (`ProjectViewHost`).
+///
+/// Contains all statuses, tasks, and permissions required to render any
+/// pluggable view without secondary RPC roundtrips.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BoardSnapshot {
+    pub project_id: i64,
+    pub project_name: String,
+    pub enabled_views: Vec<ProjectViewKind>,
+    pub default_view: ProjectViewKind,
+    pub caller_permissions: i64,
+    pub statuses: Vec<WorkflowStatusDto>,
+    pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub dependencies: Vec<TaskDependencyDto>,
+}
+
+impl BoardSnapshot {
+    /// Returns the workflow status matching `id` if present in this snapshot.
+    pub fn find_status(&self, id: i64) -> Option<&WorkflowStatusDto> {
+        self.statuses.iter().find(|s| s.id == id)
+    }
+
+    /// Resolves the effective status for a task, falling back to initial status if unassigned.
+    pub fn status_for_task<'a>(&'a self, task: &Task) -> Option<&'a WorkflowStatusDto> {
+        if let Some(ws_id) = task.workflow_status_id {
+            if let Some(s) = self.find_status(ws_id) {
+                return Some(s);
+            }
+        }
+        // Fallback: match by name or initial status
+        self.statuses
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(task.status.as_str()))
+            .or_else(|| self.statuses.iter().find(|s| s.is_initial))
+            .or_else(|| self.statuses.first())
+    }
+
+    /// Returns all tasks mapped to the given workflow status id.
+    pub fn tasks_for_status(&self, status_id: i64) -> Vec<&Task> {
+        self.tasks
+            .iter()
+            .filter(|t| self.status_for_task(t).map(|s| s.id) == Some(status_id))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Task {
     pub id: i64,
@@ -371,7 +513,9 @@ pub struct Task {
     pub assignees: Vec<User>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Permission(pub u64);
 
 impl Permission {
@@ -390,14 +534,26 @@ impl Permission {
     // Pre-composed role defaults:
     pub const VIEWER_DEFAULT: Self = Self(Self::READ.0);
     pub const MEMBER_DEFAULT: Self = Self(
-        Self::READ.0 | Self::SUGGEST.0 | Self::EXECUTE.0 | Self::ASSIGN.0 | Self::MESSAGE_MEMBERS.0 | Self::IGNORABLE_BY_MEMBERS.0
+        Self::READ.0
+            | Self::SUGGEST.0
+            | Self::EXECUTE.0
+            | Self::ASSIGN.0
+            | Self::MESSAGE_MEMBERS.0
+            | Self::IGNORABLE_BY_MEMBERS.0,
     );
     pub const LEGACY_MEMBER: Self = Self(15);
     pub const LEGACY_ADMIN: Self = Self(63);
     pub const ADMIN_DEFAULT: Self = Self(
-        Self::READ.0 | Self::SUGGEST.0 | Self::EXECUTE.0 | Self::ASSIGN.0 | Self::MANAGE_MEMBERS.0
-        | Self::ADMIN.0 | Self::MANAGE_WORKFLOW.0 | Self::MODERATE_DISCUSSIONS.0
-        | Self::POST_ANNOUNCEMENTS.0 | Self::MESSAGE_MEMBERS.0
+        Self::READ.0
+            | Self::SUGGEST.0
+            | Self::EXECUTE.0
+            | Self::ASSIGN.0
+            | Self::MANAGE_MEMBERS.0
+            | Self::ADMIN.0
+            | Self::MANAGE_WORKFLOW.0
+            | Self::MODERATE_DISCUSSIONS.0
+            | Self::POST_ANNOUNCEMENTS.0
+            | Self::MESSAGE_MEMBERS.0,
     );
 
     #[inline]
@@ -733,12 +889,22 @@ mod tests {
         assert!(is_valid_email("  alice@company.co.uk  "));
 
         // Custom TLD & boundary rules
-        assert!(!is_valid_email("user@example"), "Requires a dot-separated domain");
-        assert!(!is_valid_email("user@example."), "Trailing dot should be invalid");
-        assert!(!is_valid_email("user@example.c"), "TLD must be at least 2 characters");
-        assert!(!is_valid_email("user@.example.com"), "Domain cannot start with dot");
+        assert!(
+            !is_valid_email("user@example"),
+            "Requires a dot-separated domain"
+        );
+        assert!(
+            !is_valid_email("user@example."),
+            "Trailing dot should be invalid"
+        );
+        assert!(
+            !is_valid_email("user@example.c"),
+            "TLD must be at least 2 characters"
+        );
+        assert!(
+            !is_valid_email("user@.example.com"),
+            "Domain cannot start with dot"
+        );
         assert!(!is_valid_email("plainaddress"), "Missing @ and domain");
     }
 }
-
-

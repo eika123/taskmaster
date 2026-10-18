@@ -90,11 +90,12 @@ async fn test_project_task_association_and_deletion_cleanup() {
         .unwrap();
 
     // Step 5: Verify no orphaned tasks remain in the database
-    let count_remaining_tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE project_id = $1")
-        .bind(proj_id)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    let count_remaining_tasks: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE project_id = $1")
+            .bind(proj_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
     assert_eq!(
         count_remaining_tasks, 0,
         "All tasks of deleted project should be cascaded and removed"

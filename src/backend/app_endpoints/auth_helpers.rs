@@ -1,6 +1,6 @@
+use crate::types::Permission;
 use dioxus::prelude::*;
 use sqlx::PgPool;
-use crate::types::Permission;
 
 pub async fn check_project_perm(
     pool: &PgPool,
@@ -71,11 +71,7 @@ pub async fn can_view_project(
     .map(|opt| opt.unwrap_or(false))
 }
 
-pub async fn is_org_admin(
-    pool: &PgPool,
-    org_id: i64,
-    user_id: i64,
-) -> Result<bool, ServerFnError> {
+pub async fn is_org_admin(pool: &PgPool, org_id: i64, user_id: i64) -> Result<bool, ServerFnError> {
     sqlx::query_scalar(
         "SELECT (o.governing_user_id = $1 OR EXISTS (
             SELECT 1 FROM organization_member_roles omr
@@ -116,4 +112,3 @@ pub fn verify_confirmation(
     }
     Ok(())
 }
-

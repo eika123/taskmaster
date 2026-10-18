@@ -1,9 +1,9 @@
-use dioxus::prelude::*;
+use crate::components::*;
+use crate::Route;
 use dioxus::history::{History, MemoryHistory};
+use dioxus::prelude::*;
 use dioxus::router::components::HistoryProvider;
 use std::rc::Rc;
-use crate::Route;
-use crate::components::*;
 
 #[component]
 fn TestSsrApp(initial_path: String, user: Option<User>) -> Element {
@@ -67,10 +67,8 @@ fn TestProjectsWrapper(projects: Vec<Project>) -> Element {
 }
 
 fn render_projects_ssr(projects: Vec<Project>) -> String {
-    let mut vdom = VirtualDom::new_with_props(
-        TestProjectsWrapper,
-        TestProjectsWrapperProps { projects },
-    );
+    let mut vdom =
+        VirtualDom::new_with_props(TestProjectsWrapper, TestProjectsWrapperProps { projects });
     vdom.rebuild_in_place();
     dioxus::ssr::render(&vdom)
 }

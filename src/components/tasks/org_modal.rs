@@ -1,10 +1,10 @@
-use dioxus::prelude::*;
-use crate::types::ProjectOrganization;
 use crate::backend::app_endpoints::{
     affiliate_organization_with_project, get_available_organizations_for_project,
     get_project_organizations, remove_organization_from_project,
 };
 use crate::components::organizations::modals::ConfirmActiveTasksWarningModal;
+use crate::types::ProjectOrganization;
+use dioxus::prelude::*;
 
 #[component]
 pub fn ProjectOrganizationsModal(
@@ -12,9 +12,8 @@ pub fn ProjectOrganizationsModal(
     project_name: String,
     on_close: EventHandler<()>,
 ) -> Element {
-    let mut orgs_resource = use_server_future(move || async move {
-        get_project_organizations(project_id).await
-    })?;
+    let mut orgs_resource =
+        use_server_future(move || async move { get_project_organizations(project_id).await })?;
 
     let mut available_resource = use_server_future(move || async move {
         get_available_organizations_for_project(project_id).await
@@ -45,7 +44,9 @@ pub fn ProjectOrganizationsModal(
         let oid = match *new_org_id.read() {
             Some(id) => id,
             None => {
-                form_error.set(Some("Please select an organization to affiliate.".to_string()));
+                form_error.set(Some(
+                    "Please select an organization to affiliate.".to_string(),
+                ));
                 return;
             }
         };
@@ -129,97 +130,24 @@ pub fn ProjectOrganizationsModal(
                         div { class: "task-detail-error", "{err}" }
                     }
 
-                    // Existing Affiliated Organizations
-                    div {
-                        h3 { style: "margin: 0 0 10px 0; font-size: var(--font-size-cardheader-small); color: var(--text-primary);",
-                            "Current Affiliated Organizations ({affiliated_orgs.len()})"
-                        }
-                        if affiliated_orgs.is_empty() {
-                            p { style: "color: var(--text-muted); font-size: var(--font-size-body-sm);",
-                                "No organizations are affiliated with this project yet."
-                            }
-                        } else {
-                            div { style: "display: flex; flex-direction: column; gap: 12px;",
-                                for org in affiliated_orgs.iter() {
-                                    {
-                                        let o = org.clone();
-                                        let oid = o.organization_id;
-                                        rsx! {
-                                            ProjectOrgRow {
-                                                project_id,
-                                                org: o,
-                                                on_update: move |_| {
-                                                    orgs_resource.restart();
-                                                },
-                                                on_remove: move |_| handle_remove_org(oid),
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    AffiliatedOrgsList {
+                        project_id,
+                        affiliated_orgs: affiliated_orgs.clone(),
+                        on_update: move |_| {
+                            orgs_resource.restart();
+                        },
+                        on_remove: handle_remove_org,
                     }
 
-                    // Affiliate New Organization
-                    div { style: "border-top: 1px solid var(--border-subtle); padding-top: 16px;",
-                        h3 { style: "margin: 0 0 12px 0; font-size: var(--font-size-cardheader-small); color: var(--text-primary);",
-                            "+ Affiliate New Organization"
-                        }
-                        if available_orgs.is_empty() {
-                            p { style: "color: var(--text-muted); font-size: var(--font-size-meta); font-style: italic;",
-                                "All registered organizations are already affiliated with this project."
-                            }
-                        } else {
-                            div { style: "display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 10px; align-items: flex-end;",
-                                div {
-                                    label { class: "form-label", "Select Organization" }
-                                    select {
-                                        class: "task-status-select",
-                                        onchange: move |e| {
-                                            if let Ok(id) = e.value().parse::<i64>() {
-                                                new_org_id.set(Some(id));
-                                            } else {
-                                                new_org_id.set(None);
-                                            }
-                                        },
-                                        option { value: "", "-- Choose organization --" }
-                                        for a in &available_orgs {
-                                            option { value: "{a.id}", "{a.name} (@{a.slug})" }
-                                        }
-                                    }
-                                }
-                                div {
-                                    label { class: "form-label", "Relationship" }
-                                    select {
-                                        class: "task-status-select",
-                                        value: "{new_rel_type}",
-                                        onchange: move |e| new_rel_type.set(e.value()),
-                                        option { value: "partner", "Partner" }
-                                        option { value: "owner", "Owner" }
-                                        option { value: "contractor", "Contractor" }
-                                        option { value: "auditor", "Auditor" }
-                                    }
-                                }
-                                div {
-                                    label { class: "form-label", "Max Role" }
-                                    select {
-                                        class: "task-status-select",
-                                        value: "{new_max_role}",
-                                        onchange: move |e| new_max_role.set(e.value()),
-                                        option { value: "viewer", "Viewer" }
-                                        option { value: "member", "Member" }
-                                        option { value: "admin", "Admin" }
-                                    }
-                                }
-                                button {
-                                    r#type: "button",
-                                    class: "btn-task-save",
-                                    disabled: *is_affiliating.read(),
-                                    onclick: handle_affiliate_new,
-                                    if *is_affiliating.read() { "Adding..." } else { "+ Affiliate" }
-                                }
-                            }
-                        }
+                    AffiliateOrgForm {
+                        available_orgs: available_orgs.clone(),
+                        is_affiliating: *is_affiliating.read(),
+                        new_rel_type: new_rel_type.read().clone(),
+                        new_max_role: new_max_role.read().clone(),
+                        on_change_org: move |id| new_org_id.set(id),
+                        on_change_rel: move |rel| new_rel_type.set(rel),
+                        on_change_role: move |role| new_max_role.set(role),
+                        on_submit: handle_affiliate_new,
                     }
 
                     div { class: "overlay-footer",
@@ -241,6 +169,120 @@ pub fn ProjectOrganizationsModal(
                 on_close: move |_| pending_warning.set(None),
                 on_confirm: handle_confirm_warning,
                 is_loading: *is_warning_loading.read(),
+            }
+        }
+    }
+}
+
+/// Renders the list of current affiliated organizations.
+#[component]
+fn AffiliatedOrgsList(
+    project_id: i64,
+    affiliated_orgs: Vec<ProjectOrganization>,
+    on_update: EventHandler<()>,
+    on_remove: EventHandler<i64>,
+) -> Element {
+    rsx! {
+        div {
+            h3 { style: "margin: 0 0 10px 0; font-size: var(--font-size-cardheader-small); color: var(--text-primary);",
+                "Current Affiliated Organizations ({affiliated_orgs.len()})"
+            }
+            if affiliated_orgs.is_empty() {
+                p { style: "color: var(--text-muted); font-size: var(--font-size-body-sm);",
+                    "No organizations are affiliated with this project yet."
+                }
+            } else {
+                div { style: "display: flex; flex-direction: column; gap: 12px;",
+                    for org in affiliated_orgs.into_iter() {
+                        {
+                            let oid = org.organization_id;
+                            rsx! {
+                                ProjectOrgRow {
+                                    project_id,
+                                    org,
+                                    on_update: move |_| on_update.call(()),
+                                    on_remove: move |_| on_remove.call(oid),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Form for selecting and affiliating a new organization to a project.
+#[component]
+fn AffiliateOrgForm(
+    available_orgs: Vec<crate::types::Organization>,
+    is_affiliating: bool,
+    new_rel_type: String,
+    new_max_role: String,
+    on_change_org: EventHandler<Option<i64>>,
+    on_change_rel: EventHandler<String>,
+    on_change_role: EventHandler<String>,
+    on_submit: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { style: "border-top: 1px solid var(--border-subtle); padding-top: 16px;",
+            h3 { style: "margin: 0 0 12px 0; font-size: var(--font-size-cardheader-small); color: var(--text-primary);",
+                "+ Affiliate New Organization"
+            }
+            if available_orgs.is_empty() {
+                p { style: "color: var(--text-muted); font-size: var(--font-size-meta); font-style: italic;",
+                    "All registered organizations are already affiliated with this project."
+                }
+            } else {
+                div { style: "display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 10px; align-items: flex-end;",
+                    div {
+                        label { class: "form-label", "Select Organization" }
+                        select {
+                            class: "task-status-select",
+                            onchange: move |e| {
+                                if let Ok(id) = e.value().parse::<i64>() {
+                                    on_change_org.call(Some(id));
+                                } else {
+                                    on_change_org.call(None);
+                                }
+                            },
+                            option { value: "", "-- Choose organization --" }
+                            for a in &available_orgs {
+                                option { value: "{a.id}", "{a.name} (@{a.slug})" }
+                            }
+                        }
+                    }
+                    div {
+                        label { class: "form-label", "Relationship" }
+                        select {
+                            class: "task-status-select",
+                            value: "{new_rel_type}",
+                            onchange: move |e| on_change_rel.call(e.value()),
+                            option { value: "partner", "Partner" }
+                            option { value: "owner", "Owner" }
+                            option { value: "contractor", "Contractor" }
+                            option { value: "auditor", "Auditor" }
+                        }
+                    }
+                    div {
+                        label { class: "form-label", "Max Role" }
+                        select {
+                            class: "task-status-select",
+                            value: "{new_max_role}",
+                            onchange: move |e| on_change_role.call(e.value()),
+                            option { value: "viewer", "Viewer" }
+                            option { value: "member", "Member" }
+                            option { value: "admin", "Admin" }
+                        }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn-task-save",
+                        disabled: is_affiliating,
+                        onclick: move |_| on_submit.call(()),
+                        if is_affiliating { "Adding..." } else { "+ Affiliate" }
+                    }
+                }
             }
         }
     }
@@ -268,7 +310,10 @@ fn ProjectOrgRow(
         is_saving.set(true);
 
         spawn(async move {
-            if affiliate_organization_with_project(project_id, oid, rel, max_r).await.is_ok() {
+            if affiliate_organization_with_project(project_id, oid, rel, max_r)
+                .await
+                .is_ok()
+            {
                 is_saving.set(false);
                 on_update.call(());
             } else {

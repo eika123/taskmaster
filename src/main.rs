@@ -1,11 +1,10 @@
 use dioxus::prelude::*;
 
-pub mod types;
 pub mod backend;
 pub mod components;
+pub mod types;
 use crate::components::*;
 pub use crate::types::*;
-
 
 pub use crate::backend::app_endpoints::*;
 
@@ -33,6 +32,10 @@ pub enum Route {
             TasksDashboardPage {},
             #[route("/projects/tasks/:project_id")]
             ProjectTasksPage { project_id: i64 },
+            #[route("/projects/:project_id/board")]
+            ProjectBoardDefaultPage { project_id: i64 },
+            #[route("/projects/:project_id/board/:view")]
+            ProjectBoardViewPage { project_id: i64, view: ProjectViewKind },
             #[route("/projects/:project_id/manage")]
             ProjectManagePage { project_id: i64 },
             #[route("/task/new")]
@@ -68,8 +71,6 @@ fn main() {
     dioxus::launch(App);
 }
 
-
-
 #[component]
 fn App() -> Element {
     let mut user = use_signal(|| None::<User>);
@@ -86,18 +87,23 @@ fn App() -> Element {
     // Restore user session from localStorage
     use_effect(move || {
         spawn(async move {
-            let mut eval = document::eval(r#"
+            let mut eval = document::eval(
+                r#"
                 let t = localStorage.getItem("flowtask_session_token");
                 dioxus.send(t);
-            "#);
+            "#,
+            );
             if let Ok(Some(t_owned)) = eval.recv::<Option<String>>().await {
                 if !t_owned.is_empty() {
                     token.set(Some(t_owned.clone()));
-                    if let Ok(Some(u)) = crate::backend::app_endpoints::get_current_user(Some(t_owned)).await {
+                    if let Ok(Some(u)) =
+                        crate::backend::app_endpoints::get_current_user(Some(t_owned)).await
+                    {
                         user.set(Some(u));
                     } else {
                         token.set(None);
-                        let _ = document::eval(r#"localStorage.removeItem("flowtask_session_token");"#);
+                        let _ =
+                            document::eval(r#"localStorage.removeItem("flowtask_session_token");"#);
                     }
                 }
             }
@@ -125,7 +131,22 @@ fn TasksDashboardPage() -> Element {
 #[component]
 fn ProjectTasksPage(project_id: i64) -> Element {
     rsx! {
-        TaskView { project_id: Some(project_id) }
+        ProjectBoardPage { project_id, view: None }
     }
 }
 
+// /// Project board default view (uses saved view preference or KanbanClassic)
+#[component]
+fn ProjectBoardDefaultPage(project_id: i64) -> Element {
+    rsx! {
+        ProjectBoardPage { project_id, view: None }
+    }
+}
+
+// /// Project board with explicit view kind deep-link
+#[component]
+fn ProjectBoardViewPage(project_id: i64, view: ProjectViewKind) -> Element {
+    rsx! {
+        ProjectBoardPage { project_id, view: Some(view) }
+    }
+}

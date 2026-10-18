@@ -1,4 +1,3 @@
-
 #[cfg(feature = "server")]
 #[derive(sqlx::FromRow)]
 pub struct RawUserWithPassword {
@@ -25,7 +24,12 @@ pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Er
     };
     let pepper = get_pepper();
     let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::new_with_secret(&pepper, Algorithm::Argon2id, Version::V0x13, Params::default())?;
+    let argon2 = Argon2::new_with_secret(
+        &pepper,
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )?;
     let hash = argon2.hash_password(password.as_bytes(), &salt)?;
     Ok(hash.to_string())
 }
@@ -38,8 +42,15 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, argon2::passw
     };
     let pepper = get_pepper();
     let parsed_hash = PasswordHash::new(hash)?;
-    let argon2 = Argon2::new_with_secret(&pepper, Algorithm::Argon2id, Version::V0x13, Params::default())?;
-    Ok(argon2.verify_password(password.as_bytes(), &parsed_hash).is_ok())
+    let argon2 = Argon2::new_with_secret(
+        &pepper,
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::default(),
+    )?;
+    Ok(argon2
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok())
 }
 
 #[cfg(feature = "server")]
@@ -68,7 +79,8 @@ mod tests {
         let is_valid = verify_password(password, &hash).expect("Verification should succeed");
         assert!(is_valid, "Correct password must verify");
 
-        let is_invalid = verify_password("WrongPassword!", &hash).expect("Verification should succeed");
+        let is_invalid =
+            verify_password("WrongPassword!", &hash).expect("Verification should succeed");
         assert!(!is_invalid, "Wrong password must fail verification");
     }
 
@@ -76,7 +88,8 @@ mod tests {
     #[test]
     fn test_verify_existing_db_hash() {
         let seeded_hash = "$argon2id$v=19$m=19456,t=2,p=1$7Qk0X0PIR5SuTQmBcdeqfQ$NOqm0J876/r/RCYG3rMGQmOZj27hgKE3DwzKjiJ5tYs";
-        let is_valid = verify_password("password123", seeded_hash).expect("Verification should succeed");
+        let is_valid =
+            verify_password("password123", seeded_hash).expect("Verification should succeed");
         assert!(is_valid, "Seeded user passwords must verify with Argon2id");
     }
 }

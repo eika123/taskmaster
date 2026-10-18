@@ -56,7 +56,11 @@ impl axum_session::DatabasePool for SqlxPostgresSessionPool {
         Ok(())
     }
 
-    async fn load(&self, id: &str, table_name: &str) -> Result<Option<String>, axum_session::DatabaseError> {
+    async fn load(
+        &self,
+        id: &str,
+        table_name: &str,
+    ) -> Result<Option<String>, axum_session::DatabaseError> {
         let now = chrono::Utc::now().timestamp();
         let query = format!("SELECT session FROM {table_name} WHERE id = $1 AND expires > $2");
         let session = sqlx::query_scalar(&query)
@@ -68,7 +72,11 @@ impl axum_session::DatabasePool for SqlxPostgresSessionPool {
         Ok(session)
     }
 
-    async fn delete_one_by_id(&self, id: &str, table_name: &str) -> Result<(), axum_session::DatabaseError> {
+    async fn delete_one_by_id(
+        &self,
+        id: &str,
+        table_name: &str,
+    ) -> Result<(), axum_session::DatabaseError> {
         let query = format!("DELETE FROM {table_name} WHERE id = $1");
         sqlx::query(&query)
             .bind(id)
@@ -78,9 +86,14 @@ impl axum_session::DatabasePool for SqlxPostgresSessionPool {
         Ok(())
     }
 
-    async fn exists(&self, id: &str, table_name: &str) -> Result<bool, axum_session::DatabaseError> {
+    async fn exists(
+        &self,
+        id: &str,
+        table_name: &str,
+    ) -> Result<bool, axum_session::DatabaseError> {
         let now = chrono::Utc::now().timestamp();
-        let query = format!("SELECT EXISTS(SELECT 1 FROM {table_name} WHERE id = $1 AND expires > $2)");
+        let query =
+            format!("SELECT EXISTS(SELECT 1 FROM {table_name} WHERE id = $1 AND expires > $2)");
         let exists: bool = sqlx::query_scalar(&query)
             .bind(id)
             .bind(now)
@@ -90,7 +103,10 @@ impl axum_session::DatabasePool for SqlxPostgresSessionPool {
         Ok(exists)
     }
 
-    async fn delete_by_expiry(&self, table_name: &str) -> Result<Vec<String>, axum_session::DatabaseError> {
+    async fn delete_by_expiry(
+        &self,
+        table_name: &str,
+    ) -> Result<Vec<String>, axum_session::DatabaseError> {
         let now = chrono::Utc::now().timestamp();
         let select_query = format!("SELECT id FROM {table_name} WHERE expires <= $1");
         let ids: Vec<String> = sqlx::query_scalar(&select_query)
@@ -140,7 +156,8 @@ fn ax_session_database_err(err: sqlx::Error) -> axum_session::DatabaseError {
 }
 
 #[cfg(feature = "server")]
-pub type AppAuthSession = axum_session_auth::AuthSession<User, i64, SqlxPostgresSessionPool, sqlx::PgPool>;
+pub type AppAuthSession =
+    axum_session_auth::AuthSession<User, i64, SqlxPostgresSessionPool, sqlx::PgPool>;
 
 #[cfg(feature = "server")]
 pub async fn create_session_store(
@@ -166,15 +183,22 @@ pub fn create_auth_layer(
     pool: sqlx::PgPool,
 ) -> axum_session_auth::AuthSessionLayer<User, i64, SqlxPostgresSessionPool, sqlx::PgPool> {
     let auth_config = axum_session_auth::AuthConfig::<i64>::default();
-    axum_session_auth::AuthSessionLayer::<User, i64, SqlxPostgresSessionPool, sqlx::PgPool>::new(Some(pool))
-        .with_config(auth_config)
+    axum_session_auth::AuthSessionLayer::<User, i64, SqlxPostgresSessionPool, sqlx::PgPool>::new(
+        Some(pool),
+    )
+    .with_config(auth_config)
 }
 
 #[cfg(feature = "server")]
 pub fn is_public_path(path: &str) -> bool {
     const PREFIXES: &[&str] = &[
-        "/assets", "/wasm", "/_dioxus", "/api/login", "/api/register",
-        "/api/get_current_user", "/api/logout",
+        "/assets",
+        "/wasm",
+        "/_dioxus",
+        "/api/login",
+        "/api/register",
+        "/api/get_current_user",
+        "/api/logout",
     ];
     const EXTENSIONS: &[&str] = &[
         ".wasm", ".js", ".css", ".ico", ".png", ".jpg", ".svg", ".map",
@@ -231,11 +255,19 @@ pub async fn auth_header_to_cookie_middleware(
         .unwrap_or(false);
 
     if !has_flowtask_cookie {
-        if let Some(auth_val) = request.headers().get("authorization").and_then(|v| v.to_str().ok()) {
+        if let Some(auth_val) = request
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+        {
             if let Some(token) = auth_val.strip_prefix("Bearer ") {
                 let token = token.trim();
                 if !token.is_empty() {
-                    let new_cookie = if let Some(existing) = request.headers().get("cookie").and_then(|v| v.to_str().ok()) {
+                    let new_cookie = if let Some(existing) = request
+                        .headers()
+                        .get("cookie")
+                        .and_then(|v| v.to_str().ok())
+                    {
                         format!("{}; flowtask_session={}", existing, token)
                     } else {
                         format!("flowtask_session={}", token)
@@ -267,13 +299,19 @@ mod tests {
         let session_data = r#"{"user_auth_session_id":1,"data":"xyz"}"#;
         let expires = chrono::Utc::now().timestamp() + 3600;
 
-        session_pool.store(session_id, session_data, expires, "sessions").await.unwrap();
+        session_pool
+            .store(session_id, session_data, expires, "sessions")
+            .await
+            .unwrap();
         assert!(session_pool.exists(session_id, "sessions").await.unwrap());
 
         let loaded = session_pool.load(session_id, "sessions").await.unwrap();
         assert_eq!(loaded.as_deref(), Some(session_data));
 
-        session_pool.delete_one_by_id(session_id, "sessions").await.unwrap();
+        session_pool
+            .delete_one_by_id(session_id, "sessions")
+            .await
+            .unwrap();
         assert!(!session_pool.exists(session_id, "sessions").await.unwrap());
     }
 

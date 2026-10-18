@@ -11,11 +11,11 @@
 //!   dynamic demotions, task assignment permissions, and Zero-Knowledge Need-to-Know data isolation.
 
 mod auth_tests;
-mod guardrails_tests;
 mod database_foundations_tests;
-mod workflow_tests;
+mod guardrails_tests;
 mod org_project_access_tests;
 mod organizations_tests;
 mod projects_tests;
 mod tasks_tests;
 pub mod test_helpers;
+mod workflow_tests;

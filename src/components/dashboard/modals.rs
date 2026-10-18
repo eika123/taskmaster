@@ -1,6 +1,6 @@
-use dioxus::prelude::*;
 use crate::backend::app_endpoints::{create_organization, create_project, delete_organization};
 use crate::types::Organization;
+use dioxus::prelude::*;
 
 #[component]
 pub fn CreateProjectModal(
@@ -50,59 +50,87 @@ pub fn CreateProjectModal(
             if let Some(err) = &*proj_form_error.read() {
                 div { class: "task-detail-error", "{err}" }
             }
-            div { style: "display: flex; flex-direction: column; gap: 12px;",
-                div {
-                    label { class: "form-label", "Project Name" }
-                    input {
-                        class: "task-edit-title-input",
-                        placeholder: "e.g. Core Engine",
-                        value: "{new_proj_name}",
-                        oninput: move |e| new_proj_name.set(e.value()),
-                    }
+            CreateProjectForm {
+                name: new_proj_name.read().clone(),
+                desc: new_proj_desc.read().clone(),
+                organizations,
+                is_creating: *is_creating_proj.read(),
+                on_name_change: move |val| new_proj_name.set(val),
+                on_desc_change: move |val| new_proj_desc.set(val),
+                on_org_change: move |val| new_proj_org_id.set(val),
+                on_cancel: move |_| on_close.call(()),
+                on_submit: handle_create,
+            }
+        }
+    }
+}
+
+/// Form controls for project creation.
+#[component]
+fn CreateProjectForm(
+    name: String,
+    desc: String,
+    organizations: Vec<Organization>,
+    is_creating: bool,
+    on_name_change: EventHandler<String>,
+    on_desc_change: EventHandler<String>,
+    on_org_change: EventHandler<Option<i64>>,
+    on_cancel: EventHandler<()>,
+    on_submit: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { style: "display: flex; flex-direction: column; gap: 12px;",
+            div {
+                label { class: "form-label", "Project Name" }
+                input {
+                    class: "task-edit-title-input",
+                    placeholder: "e.g. Core Engine",
+                    value: "{name}",
+                    oninput: move |e| on_name_change.call(e.value()),
                 }
-                div {
-                    label { class: "form-label", "Description" }
-                    textarea {
-                        class: "task-edit-description-textarea",
-                        placeholder: "What will this project accomplish?",
-                        value: "{new_proj_desc}",
-                        oninput: move |e| new_proj_desc.set(e.value()),
-                    }
+            }
+            div {
+                label { class: "form-label", "Description" }
+                textarea {
+                    class: "task-edit-description-textarea",
+                    placeholder: "What will this project accomplish?",
+                    value: "{desc}",
+                    oninput: move |e| on_desc_change.call(e.value()),
                 }
-                if !organizations.is_empty() {
-                    div {
-                        label { class: "form-label", "Owning Organization (Optional)" }
-                        select {
-                            class: "task-status-select",
-                            onchange: move |e| {
-                                let val = e.value();
-                                if val.is_empty() {
-                                    new_proj_org_id.set(None);
-                                } else if let Ok(org_id) = val.parse::<i64>() {
-                                    new_proj_org_id.set(Some(org_id));
-                                }
-                            },
-                            option { value: "", "Standalone (Personal Project)" }
-                            for org in &organizations {
-                                option { value: "{org.id}", "{org.name}" }
+            }
+            if !organizations.is_empty() {
+                div {
+                    label { class: "form-label", "Owning Organization (Optional)" }
+                    select {
+                        class: "task-status-select",
+                        onchange: move |e| {
+                            let val = e.value();
+                            if val.is_empty() {
+                                on_org_change.call(None);
+                            } else if let Ok(org_id) = val.parse::<i64>() {
+                                on_org_change.call(Some(org_id));
                             }
+                        },
+                        option { value: "", "Standalone (Personal Project)" }
+                        for org in &organizations {
+                            option { value: "{org.id}", "{org.name}" }
                         }
                     }
                 }
-                div { style: "display: flex; gap: 8px; justify-content: flex-end;",
-                    button {
-                        r#type: "button",
-                        class: "btn-task-cancel",
-                        onclick: move |_| on_close.call(()),
-                        "Cancel"
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn-task-save",
-                        disabled: *is_creating_proj.read(),
-                        onclick: handle_create,
-                        if *is_creating_proj.read() { "Creating..." } else { "Create Project" }
-                    }
+            }
+            div { style: "display: flex; gap: 8px; justify-content: flex-end;",
+                button {
+                    r#type: "button",
+                    class: "btn-task-cancel",
+                    onclick: move |_| on_cancel.call(()),
+                    "Cancel"
+                }
+                button {
+                    r#type: "button",
+                    class: "btn-task-save",
+                    disabled: is_creating,
+                    onclick: move |_| on_submit.call(()),
+                    if is_creating { "Creating..." } else { "Create Project" }
                 }
             }
         }
@@ -110,10 +138,7 @@ pub fn CreateProjectModal(
 }
 
 #[component]
-pub fn CreateOrgModal(
-    on_close: EventHandler<()>,
-    on_created: EventHandler<()>,
-) -> Element {
+pub fn CreateOrgModal(on_close: EventHandler<()>, on_created: EventHandler<()>) -> Element {
     let mut new_org_name = use_signal(String::new);
     let mut new_org_slug = use_signal(String::new);
     let mut org_form_error = use_signal(|| Option::<String>::None);
@@ -374,5 +399,3 @@ pub fn ConfirmDeleteModal(
         }
     }
 }
-
-

@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::types::{AuthResponse, User};
+use dioxus::prelude::*;
 
 #[cfg(feature = "server")]
 use crate::types::is_valid_email;
@@ -188,9 +188,14 @@ pub async fn get_current_user(token: Option<String>) -> Result<Option<User>, Ser
         use axum_session::DatabasePool;
         if let Ok(Some(session_json)) = session_pool.load(&t, "sessions").await {
             if let Ok(data) = serde_json::from_str::<serde_json::Value>(&session_json) {
-                let user_id = data.get("data")
+                let user_id = data
+                    .get("data")
                     .and_then(|d| d.get("user_auth_session_id"))
-                    .and_then(|v| v.as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| v.as_i64()))
+                    .and_then(|v| {
+                        v.as_str()
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .or_else(|| v.as_i64())
+                    })
                     .or_else(|| data.get("user_auth_session_id").and_then(|v| v.as_i64()));
 
                 if let Some(user_id) = user_id {
@@ -221,4 +226,3 @@ pub async fn get_users() -> Result<Vec<User>, ServerFnError> {
 
     Ok(users)
 }
-

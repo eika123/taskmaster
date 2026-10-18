@@ -7,9 +7,9 @@
 //! 4. Organization Role Default Bitmasks: verifies auto-seeded `'admin'` (1023) and `'member'` (1551) permissions masks.
 //! 5. `DateTime<Utc>` serialization and round-trip via sqlx and Dioxus domain types.
 
-use chrono::{DateTime, Utc};
 use crate::backend::database::get_db;
 use crate::types::{has_perm, Permission};
+use chrono::{DateTime, Utc};
 
 #[tokio::test]
 async fn test_timestamptz_columns_in_information_schema() {
@@ -50,14 +50,14 @@ async fn test_has_perm_sql_function() {
 
     // Test cases: (mask, required, expected)
     let cases = [
-        (15i64, 4i64, true),            // EXECUTE in LEGACY_MEMBER (15)
-        (15i64, 32i64, false),          // ADMIN in LEGACY_MEMBER (15)
-        (0i64, 1i64, false),            // Any perm in 0
-        (1023i64, 512i64, true),        // MESSAGE_MEMBERS in ADMIN_DEFAULT (1023)
-        (1023i64, 1024i64, false),      // IGNORABLE_BY_MEMBERS not in ADMIN_DEFAULT
-        (1551i64, 1024i64, true),       // IGNORABLE_BY_MEMBERS in MEMBER_DEFAULT (1551)
-        (1551i64, 4i64, true),          // EXECUTE in MEMBER_DEFAULT
-        (1551i64, 32i64, false),         // ADMIN not in MEMBER_DEFAULT
+        (15i64, 4i64, true),       // EXECUTE in LEGACY_MEMBER (15)
+        (15i64, 32i64, false),     // ADMIN in LEGACY_MEMBER (15)
+        (0i64, 1i64, false),       // Any perm in 0
+        (1023i64, 512i64, true),   // MESSAGE_MEMBERS in ADMIN_DEFAULT (1023)
+        (1023i64, 1024i64, false), // IGNORABLE_BY_MEMBERS not in ADMIN_DEFAULT
+        (1551i64, 1024i64, true),  // IGNORABLE_BY_MEMBERS in MEMBER_DEFAULT (1551)
+        (1551i64, 4i64, true),     // EXECUTE in MEMBER_DEFAULT
+        (1551i64, 32i64, false),   // ADMIN not in MEMBER_DEFAULT
     ];
 
     for (mask, required, expected) in cases {
@@ -121,11 +121,26 @@ fn test_rust_permission_bitflags_invariants() {
     assert!(!combo.intersects(Permission::SUGGEST | Permission::ADMIN));
 
     // has_perm helper
-    assert!(has_perm(Permission::MEMBER_DEFAULT.as_i64(), Permission::EXECUTE));
-    assert!(has_perm(Permission::MEMBER_DEFAULT.as_i64(), Permission::IGNORABLE_BY_MEMBERS));
-    assert!(!has_perm(Permission::MEMBER_DEFAULT.as_i64(), Permission::ADMIN));
-    assert!(has_perm(Permission::ADMIN_DEFAULT.as_i64(), Permission::ADMIN));
-    assert!(!has_perm(Permission::ADMIN_DEFAULT.as_i64(), Permission::IGNORABLE_BY_MEMBERS));
+    assert!(has_perm(
+        Permission::MEMBER_DEFAULT.as_i64(),
+        Permission::EXECUTE
+    ));
+    assert!(has_perm(
+        Permission::MEMBER_DEFAULT.as_i64(),
+        Permission::IGNORABLE_BY_MEMBERS
+    ));
+    assert!(!has_perm(
+        Permission::MEMBER_DEFAULT.as_i64(),
+        Permission::ADMIN
+    ));
+    assert!(has_perm(
+        Permission::ADMIN_DEFAULT.as_i64(),
+        Permission::ADMIN
+    ));
+    assert!(!has_perm(
+        Permission::ADMIN_DEFAULT.as_i64(),
+        Permission::IGNORABLE_BY_MEMBERS
+    ));
 }
 
 #[tokio::test]
@@ -203,14 +218,15 @@ async fn test_timestamptz_roundtrip_precision() {
     );
 
     // Read back via SELECT
-    let fetched_created_at: DateTime<Utc> = sqlx::query_scalar(
-        "SELECT created_at FROM organization WHERE id = $1",
-    )
-    .bind(org_id)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let fetched_created_at: DateTime<Utc> =
+        sqlx::query_scalar("SELECT created_at FROM organization WHERE id = $1")
+            .bind(org_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
 
-    assert_eq!(created_at, fetched_created_at, "TIMESTAMPTZ round-trip must be identical");
+    assert_eq!(
+        created_at, fetched_created_at,
+        "TIMESTAMPTZ round-trip must be identical"
+    );
 }
-

@@ -1,9 +1,10 @@
-use dioxus::prelude::*;
 use crate::components::assignee_search::TaskAssigneesSection;
 use crate::components::status_select::TaskStatusSelect;
-use crate::Route;
 use crate::types::{Task, TaskStatus, User};
+use crate::Route;
+use dioxus::prelude::*;
 
+/// Task card rendered in legacy TaskColumn view.
 #[component]
 pub fn TaskCard(
     task: Task,
@@ -15,55 +16,27 @@ pub fn TaskCard(
     on_unassign: EventHandler<(i64, i64)>,
 ) -> Element {
     let task_id = task.id;
-    let project_id = task.project_id;
-    let project_name = task.project_name.clone();
     let title = task.title.clone();
-    let author_name = task.author_name.clone();
-    let description = task.description.clone();
     let current_status = task.status;
-    let assignees = task.assignees.clone();
 
     rsx! {
         div { class: "task-card status-{current_status.as_str()}",
-            div { class: "task-card-header",
-                div { style: "display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0;",
-                    Link {
-                        to: Route::ProjectTasksPage {
-                            project_id,
-                        },
-                        class: "task-card-project-badge",
-                        "📁 {project_name}"
-                    }
-                    Link {
-                        to: Route::TaskPage { id: task_id },
-                        class: "task-card-title",
-                        "{title}"
-                    }
-                }
-                if can_mutate {
-                    button {
-                        r#type: "button",
-                        class: "btn-dismiss",
-                        aria_label: "Dismiss task: {title}",
-                        onclick: move |_| on_dismiss.call(task_id),
-                        "✕"
-                    }
-                }
+            CardTopSection {
+                task_id,
+                project_id: task.project_id,
+                project_name: task.project_name.clone(),
+                title: title.clone(),
+                can_mutate,
+                on_dismiss,
             }
 
-            if !author_name.is_empty() {
-                div { class: "task-card-author",
-                    span { class: "author-label", "Author: " }
-                    span { class: "author-name", "{author_name}" }
-                }
-            }
-
-            if !description.is_empty() {
-                p { class: "task-card-desc", "{description}" }
+            CardAuthorAndDesc {
+                author_name: task.author_name.clone(),
+                description: task.description.clone(),
             }
 
             TaskAssigneesSection {
-                assignees: assignees.clone(),
+                assignees: task.assignees.clone(),
                 all_users,
                 task_title: title.clone(),
                 can_mutate,
@@ -83,3 +56,55 @@ pub fn TaskCard(
     }
 }
 
+/// Top header of the task card with project badge, title link, and dismiss button.
+#[component]
+fn CardTopSection(
+    task_id: i64,
+    project_id: i64,
+    project_name: String,
+    title: String,
+    can_mutate: bool,
+    on_dismiss: EventHandler<i64>,
+) -> Element {
+    rsx! {
+        div { class: "task-card-header",
+            div { style: "display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0;",
+                Link {
+                    to: Route::ProjectTasksPage { project_id },
+                    class: "task-card-project-badge",
+                    "📁 {project_name}"
+                }
+                Link {
+                    to: Route::TaskPage { id: task_id },
+                    class: "task-card-title",
+                    "{title}"
+                }
+            }
+            if can_mutate {
+                button {
+                    r#type: "button",
+                    class: "btn-dismiss",
+                    aria_label: "Dismiss task: {title}",
+                    onclick: move |_| on_dismiss.call(task_id),
+                    "✕"
+                }
+            }
+        }
+    }
+}
+
+/// Author label and description snippet of the task card.
+#[component]
+fn CardAuthorAndDesc(author_name: String, description: String) -> Element {
+    rsx! {
+        if !author_name.is_empty() && author_name != "Deleted User" {
+            div { class: "task-card-author",
+                span { class: "author-label", "Author: " }
+                span { class: "author-name", "{author_name}" }
+            }
+        }
+        if !description.is_empty() {
+            p { class: "task-card-desc", "{description}" }
+        }
+    }
+}

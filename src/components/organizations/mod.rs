@@ -6,4 +6,3 @@ pub mod roles_page;
 
 pub use page::OrganizationDashboardPage;
 pub use roles_page::OrganizationRolesPage;
-

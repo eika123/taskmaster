@@ -1,11 +1,11 @@
-use dioxus_fullstack::FullstackContext;
-use http::Request;
-use tower::{ServiceBuilder, ServiceExt};
 use crate::backend::database::get_db;
 use crate::backend::middleware::auth::{
     auth_header_to_cookie_middleware, create_auth_layer, create_session_store,
     SqlxPostgresSessionPool,
 };
+use dioxus_fullstack::FullstackContext;
+use http::Request;
+use tower::{ServiceBuilder, ServiceExt};
 
 /// Seeds a test session into the PostgreSQL `sessions` table for a known user and token.
 pub async fn seed_test_session(user_id: i64, token: &str) {
@@ -29,7 +29,10 @@ pub async fn seed_test_session(user_id: i64, token: &str) {
 
 /// Executes a future within a real Axum session & auth context pipeline,
 /// loading the session from the PostgreSQL database using the provided session token.
-pub async fn with_test_session<F, R>(token: Option<&str>, fut_fn: impl FnOnce() -> F + Send + 'static) -> R
+pub async fn with_test_session<F, R>(
+    token: Option<&str>,
+    fut_fn: impl FnOnce() -> F + Send + 'static,
+) -> R
 where
     F: std::future::Future<Output = R> + Send + 'static,
     R: Send + 'static,
@@ -60,7 +63,9 @@ where
                 if let Some(sender) = tx_clone.lock().unwrap().take() {
                     let _ = sender.send(res);
                 }
-                Ok::<_, std::convert::Infallible>(axum::response::Response::new(axum::body::Body::empty()))
+                Ok::<_, std::convert::Infallible>(axum::response::Response::new(
+                    axum::body::Body::empty(),
+                ))
             }
         }));
 

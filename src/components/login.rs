@@ -67,11 +67,7 @@ pub fn LoginPage() -> Element {
     rsx! {
         div { class: "auth-page-container",
             div { class: "auth-card",
-                div { class: "auth-header",
-                    span { class: "auth-icon", "🔐" }
-                    h1 { class: "auth-title", "Log in to FlowTask" }
-                    p { class: "auth-subtitle", "Welcome back! Please enter your details." }
-                }
+                LoginHeader {}
 
                 if let Some(err) = error_msg() {
                     div { class: "auth-error-banner",
@@ -80,61 +76,103 @@ pub fn LoginPage() -> Element {
                     }
                 }
 
-                form {
-                    class: "auth-form",
-                    action: "javascript:void(0);",
-                    onsubmit: on_submit,
-                    div { class: "form-group",
-                        label { r#for: "login-email", "Email address" }
-                        input {
-                            id: "login-email",
-                            r#type: "email",
-                            class: if email_is_invalid() { "input-invalid" },
-                            placeholder: "you@example.com",
-                            required: true,
-                            value: "{email}",
-                            oninput: move |e| email.set(e.value()),
-                            onblur: move |_| email_touched.set(true),
-                            disabled: is_submitting(),
-                        }
-                        span {
-                            class: "field-hint-error",
-                            style: if !email_is_invalid() { "visibility: hidden;" },
-                            "Please enter a valid email address."
-                        }
-                    }
-
-                    div { class: "form-group",
-                        label { r#for: "login-password", "Password" }
-                        input {
-                            id: "login-password",
-                            r#type: "password",
-                            placeholder: "••••••••",
-                            required: true,
-                            value: "{password}",
-                            oninput: move |e| password.set(e.value()),
-                            disabled: is_submitting(),
-                        }
-                    }
-
-                    button {
-                        r#type: "submit",
-                        class: "btn-auth-submit",
-                        disabled: is_submitting(),
-                        if is_submitting() {
-                            "Signing in..."
-                        } else {
-                            "Sign In"
-                        }
-                    }
+                LoginForm {
+                    email: email(),
+                    password: password(),
+                    is_submitting: is_submitting(),
+                    email_is_invalid: email_is_invalid(),
+                    on_email_input: move |v| email.set(v),
+                    on_email_blur: move |_| email_touched.set(true),
+                    on_password_input: move |v| password.set(v),
+                    on_submit,
                 }
 
-                div { class: "auth-footer",
-                    p {
-                        "Don't have an account? "
-                        Link { to: Route::RegisterPage {}, class: "auth-link", "Create one here" }
-                    }
+                LoginFooter {}
+            }
+        }
+    }
+}
+
+/// Header for the login card with icon and welcome text.
+#[component]
+fn LoginHeader() -> Element {
+    rsx! {
+        div { class: "auth-header",
+            span { class: "auth-icon", "🔐" }
+            h1 { class: "auth-title", "Log in to FlowTask" }
+            p { class: "auth-subtitle", "Welcome back! Please enter your details." }
+        }
+    }
+}
+
+/// Form inputs and submit button for user login.
+#[component]
+fn LoginForm(
+    email: String,
+    password: String,
+    is_submitting: bool,
+    email_is_invalid: bool,
+    on_email_input: EventHandler<String>,
+    on_email_blur: EventHandler<()>,
+    on_password_input: EventHandler<String>,
+    on_submit: EventHandler<FormEvent>,
+) -> Element {
+    rsx! {
+        form {
+            class: "auth-form",
+            action: "javascript:void(0);",
+            onsubmit: move |evt| on_submit.call(evt),
+            div { class: "form-group",
+                label { r#for: "login-email", "Email address" }
+                input {
+                    id: "login-email",
+                    r#type: "email",
+                    class: if email_is_invalid { "input-invalid" },
+                    placeholder: "you@example.com",
+                    required: true,
+                    value: "{email}",
+                    oninput: move |e| on_email_input.call(e.value()),
+                    onblur: move |_| on_email_blur.call(()),
+                    disabled: is_submitting,
                 }
+                span {
+                    class: "field-hint-error",
+                    style: if !email_is_invalid { "visibility: hidden;" },
+                    "Please enter a valid email address."
+                }
+            }
+
+            div { class: "form-group",
+                label { r#for: "login-password", "Password" }
+                input {
+                    id: "login-password",
+                    r#type: "password",
+                    placeholder: "••••••••",
+                    required: true,
+                    value: "{password}",
+                    oninput: move |e| on_password_input.call(e.value()),
+                    disabled: is_submitting,
+                }
+            }
+
+            button {
+                r#type: "submit",
+                class: "btn-auth-submit",
+                disabled: is_submitting,
+                if is_submitting { "Signing in..." } else { "Sign In" }
+            }
+        }
+    }
+}
+
+/// Footer with registration link for new users.
+#[component]
+fn LoginFooter() -> Element {
+    rsx! {
+        div { class: "auth-footer",
+            p {
+                "Don't have an account? "
+                Link { to: Route::RegisterPage {}, class: "auth-link", "Create one here" }
             }
         }
     }
