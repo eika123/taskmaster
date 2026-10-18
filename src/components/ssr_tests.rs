@@ -192,7 +192,7 @@ fn test_ssr_my_projects_with_projects() {
             owner_org_name: Some("Acme Corp".into()),
             leader_id: 1,
             leader_name: "Alice Developer".into(),
-            created_at: 0,
+            created_at: chrono::DateTime::UNIX_EPOCH,
         },
         Project {
             id: 43,
@@ -202,7 +202,7 @@ fn test_ssr_my_projects_with_projects() {
             owner_org_name: None,
             leader_id: 2,
             leader_name: "Bob".into(),
-            created_at: 0,
+            created_at: chrono::DateTime::UNIX_EPOCH,
         },
     ];
 

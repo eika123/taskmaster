@@ -32,7 +32,7 @@
 use crate::backend::app_endpoints::tests::test_helpers::run_as_user;
 use crate::backend::app_endpoints::*;
 use crate::backend::database::get_db;
-use crate::types::TaskStatus;
+use crate::types::{Permission, TaskStatus};
 
 /// Verifies that users holding multiple organizational roles ("potato people" wearing multiple hats)
 /// receive the additive union (bitwise-OR) of all privileges across their active grants,
@@ -108,8 +108,9 @@ async fn test_multi_role_potato_people_and_additive_privileges() {
     .await
     .unwrap();
 
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(pool)
         .await
         .unwrap();
@@ -167,7 +168,7 @@ async fn test_multi_role_potato_people_and_additive_privileges() {
     .await
     .unwrap();
     assert_eq!(upgraded_role, "admin");
-    assert_eq!(upgraded_mask, 63);
+    assert_eq!(upgraded_mask, Permission::LEGACY_ADMIN.as_i64());
 
     // Verify Kari holds 2 grants in project_member_grants
     let grant_count: i64 = sqlx::query_scalar(
@@ -209,11 +210,12 @@ async fn test_multi_role_potato_people_and_additive_privileges() {
     sqlx::query(
         "UPDATE project_members
          SET active_grant_key = NULL,
-             permissions_mask = 63,
+             permissions_mask = $2,
              role = 'admin'
          WHERE project_id = $1 AND user_id = 3",
     )
     .bind(proj_id)
+    .bind(Permission::LEGACY_ADMIN.as_i64())
     .execute(pool)
     .await
     .unwrap();
@@ -416,8 +418,9 @@ async fn test_project_leadership_cascade_guardrail() {
     .await
     .unwrap();
 
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 5, 'admin', 63)")
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 5, 'admin', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(pool)
         .await
         .unwrap();
@@ -535,8 +538,9 @@ async fn test_active_tasks_preflight_warning_and_handover() {
     .await
     .unwrap();
 
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(pool)
         .await
         .unwrap();
@@ -595,10 +599,11 @@ async fn test_active_tasks_preflight_warning_and_handover() {
                WHERE other.project_id = p.id
                  AND other.user_id = 5
                  AND NOT (other.source_org_id = $1 AND other.source_org_role = 'engineering')
-                 AND (prd.permissions_mask & 4) != 0
+                 AND has_perm(prd.permissions_mask, $2)
            )",
     )
     .bind(org_id)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_one(pool)
     .await
     .unwrap();
@@ -639,10 +644,11 @@ async fn test_active_tasks_preflight_warning_and_handover() {
                WHERE other.project_id = p.id
                  AND other.user_id = 5
                  AND NOT (other.source_org_id = $1 AND other.source_org_role = 'engineering')
-                 AND (prd.permissions_mask & 4) != 0
+                 AND has_perm(prd.permissions_mask, $2)
            )",
     )
     .bind(org_id)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_one(pool)
     .await
     .unwrap();
@@ -689,23 +695,26 @@ async fn test_standalone_and_project_task_assignment_permissions() {
     .await
     .unwrap();
 
-    // Alice=1 is admin (63)
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+    // Alice=1 is admin (LEGACY_ADMIN = 63)
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(pool)
         .await
         .unwrap();
 
-    // Bob=2 is member (15, has bit 4)
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 2, 'member', 15)")
+    // Bob=2 is member (LEGACY_MEMBER = 15, has EXECUTE bit 4)
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 2, 'member', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_MEMBER.as_i64())
         .execute(pool)
         .await
         .unwrap();
 
-    // Charlie=3 is viewer (3, bit 1 + 2, lacks bit 4)
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 3, 'viewer', 3)")
+    // Charlie=3 is viewer (READ | SUGGEST = 3, lacks EXECUTE bit 4)
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 3, 'viewer', $2)")
         .bind(proj_id)
+        .bind((Permission::READ | Permission::SUGGEST).as_i64())
         .execute(pool)
         .await
         .unwrap();
@@ -789,8 +798,9 @@ async fn test_role_demotion_viewer_mutation_and_unauthorized_isolation() {
     .unwrap();
 
     // Alice is leader/admin
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(pool)
         .await
         .unwrap();
@@ -1056,8 +1066,9 @@ async fn test_revoke_org_role_project_access_cleans_up_members_and_assignments()
     .unwrap();
 
     // Alice is leader
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', 63)")
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, 1, 'admin', $2)")
         .bind(proj_id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(pool)
         .await
         .unwrap();

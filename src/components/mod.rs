@@ -25,5 +25,5 @@ pub use dashboard::*;
 pub use organizations::*;
 pub use projects::*;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod ssr_tests;

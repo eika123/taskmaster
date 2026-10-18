@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use crate::backend::app_endpoints::get_user_dashboard_data;
 use crate::components::projects::InviteProjectMemberModal;
+use crate::types::Organization;
 use super::{
     CreateOrgModal, CreateProjectModal, DashboardInbox, DashboardOrganizations, DashboardProjects,
     ManageOrgModal,
@@ -15,7 +16,7 @@ pub fn DashboardPage() -> Element {
     let mut show_create_project = use_signal(|| false);
     let mut show_create_org = use_signal(|| false);
     let mut active_invite_proj = use_signal(|| Option::<(i64, String)>::None);
-    let mut active_manage_org = use_signal(|| Option::<crate::types::Organization>::None);
+    let mut active_manage_org = use_signal(|| None::<Organization>);
 
     let data_read = dashboard_resource.read();
     let dashboard_data = match &*data_read {

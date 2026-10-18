@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use crate::types::{
-    Organization, Project, ProjectInviteDirectory, ProjectMember,
+    Organization, Permission, Project, ProjectInviteDirectory, ProjectMember,
     ProjectMemberGrant, ProjectOrganization, ProjectOrgRoleRule, User,
 };
 
@@ -28,11 +28,12 @@ pub async fn get_user_projects() -> Result<Vec<Project>, ServerFnError> {
          WHERE p.leader_id = $1
             OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $2)
             )
          ORDER BY p.id ASC",
     )
     .bind(user.id)
+    .bind(Permission::READ.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch projects: {e}")))?;
@@ -93,9 +94,10 @@ pub async fn create_project(
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to create project: {e}")))?;
 
-    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, $2, 'admin', 63)")
+    sqlx::query("INSERT INTO project_members (project_id, user_id, role, permissions_mask) VALUES ($1, $2, 'admin', $3)")
         .bind(proj_id)
         .bind(user.id)
+        .bind(Permission::LEGACY_ADMIN.as_i64())
         .execute(&mut *tx)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to register leader: {e}")))?;
@@ -227,16 +229,17 @@ pub async fn get_project_assignable_users(
     let user = get_auth_user().await?;
     let pool = get_db().await;
     if let Some(pid) = project_id {
-        ensure_project_perm(pool, pid, user.id, 1, "You do not have permission to view assignable users for this project.").await?;
+        ensure_project_perm(pool, pid, user.id, Permission::READ.as_i64(), "You do not have permission to view assignable users for this project.").await?;
 
         let users = sqlx::query_as::<_, User>(
             "SELECT u.id, u.name, u.email
              FROM project_members pm
              JOIN \"user\" u ON pm.user_id = u.id
-             WHERE pm.project_id = $1 AND (pm.permissions_mask & 4) != 0
+             WHERE pm.project_id = $1 AND has_perm(pm.permissions_mask, $2)
              ORDER BY u.name ASC",
         )
         .bind(pid)
+        .bind(Permission::EXECUTE.as_i64())
         .fetch_all(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to fetch assignable project users: {e}")))?;
@@ -270,7 +273,7 @@ pub async fn invite_user_to_project(
          ON CONFLICT(project_id, invited_user_id) DO UPDATE SET
             role = EXCLUDED.role,
             message = EXCLUDED.message,
-            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
+            created_at = NOW()",
     )
     .bind(project_id)
     .bind(invited_user_id)
@@ -359,10 +362,10 @@ pub async fn request_project_leadership_transfer(
 
     sqlx::query(
         "INSERT INTO project_leadership_transfer (project_id, requested_new_leader, created_at)
-         VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::BIGINT)
+         VALUES ($1, $2, NOW())
          ON CONFLICT(project_id) DO UPDATE SET
             requested_new_leader = EXCLUDED.requested_new_leader,
-            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
+            created_at = NOW()",
     )
     .bind(project_id)
     .bind(requested_new_leader)
@@ -511,11 +514,12 @@ pub async fn remove_organization_from_project(
                WHERE other.project_id = $1
                  AND other.user_id = u.id
                  AND (other.source_org_id IS NULL OR other.source_org_id != $2)
-                 AND (prd.permissions_mask & 4) != 0
+                 AND has_perm(prd.permissions_mask, $3)
            )",
     )
     .bind(project_id)
     .bind(organization_id)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Impact check failed: {e}")))?;
@@ -679,12 +683,13 @@ pub async fn revoke_org_role_project_access(
                WHERE other.project_id = $1
                  AND other.user_id = u.id
                  AND NOT (other.source_org_id = $2 AND other.source_org_role = $3)
-                 AND (prd.permissions_mask & 4) != 0
+                 AND has_perm(prd.permissions_mask, $4)
            )",
     )
     .bind(project_id)
     .bind(organization_id)
     .bind(&org_role)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Impact check failed: {e}")))?;
@@ -862,14 +867,16 @@ pub async fn set_active_project_hat(
             sqlx::query(
                 "UPDATE project_members
                  SET role = CASE
-                     WHEN (permissions_mask & 32) != 0 THEN 'admin'
-                     WHEN (permissions_mask & 4) != 0 THEN 'member'
+                     WHEN has_perm(permissions_mask, $3) THEN 'admin'
+                     WHEN has_perm(permissions_mask, $4) THEN 'member'
                      ELSE 'viewer'
                  END
                  WHERE project_id = $1 AND user_id = $2",
             )
             .bind(project_id)
             .bind(user.id)
+            .bind(Permission::ADMIN.as_i64())
+            .bind(Permission::EXECUTE.as_i64())
             .execute(&mut *tx)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to update role: {e}")))?;

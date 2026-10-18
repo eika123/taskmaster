@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 #[allow(unused_imports)]
-use crate::types::{Task, TaskMessage, TaskStatus, User};
+use crate::types::{Permission, Task, TaskMessage, TaskStatus, User};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -40,12 +40,13 @@ pub async fn suggest_task_for_project(
     let can_create: bool = sqlx::query_scalar(
         "SELECT (p.leader_id = $1 OR EXISTS (
             SELECT 1 FROM project_members pm
-            WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
          ))
          FROM project p WHERE p.id = $2",
     )
     .bind(user.id)
     .bind(project_id)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_optional(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -88,12 +89,13 @@ pub async fn assign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError
         let can_edit: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(pid)
+        .bind(Permission::EXECUTE.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -108,12 +110,13 @@ pub async fn assign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnError
         let assignee_valid: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user_id)
         .bind(pid)
+        .bind(Permission::EXECUTE.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -152,12 +155,13 @@ pub async fn unassign_task(task_id: i64, user_id: i64) -> Result<(), ServerFnErr
         let can_edit: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(pid)
+        .bind(Permission::EXECUTE.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -207,7 +211,7 @@ pub async fn get_my_tasks(
                    SELECT 1 FROM project_members pm
                    WHERE pm.project_id = task.project_id
                      AND pm.user_id = $1
-                     AND (pm.permissions_mask & 1) != 0
+                     AND has_perm(pm.permissions_mask, $4)
                )
            )
            AND task.id > $2 
@@ -217,6 +221,7 @@ pub async fn get_my_tasks(
     .bind(user.id)
     .bind(last_id)
     .bind(amount as i64)
+    .bind(Permission::READ.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch my tasks: {e}")))?;
@@ -300,12 +305,13 @@ pub async fn get_project_tasks(
     let can_read: bool = sqlx::query_scalar(
         "SELECT (p.leader_id = $1 OR EXISTS (
             SELECT 1 FROM project_members pm
-            WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
          ))
          FROM project p WHERE p.id = $2",
     )
     .bind(user.id)
     .bind(project_id)
+    .bind(Permission::READ.as_i64())
     .fetch_optional(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -418,12 +424,13 @@ pub async fn get_task(task_id: i64) -> Result<Task, ServerFnError> {
         let can_read: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(raw.project_id)
+        .bind(Permission::READ.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -493,12 +500,13 @@ pub async fn update_task(
         let can_edit: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(project_id)
+        .bind(Permission::EXECUTE.as_i64())
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -514,12 +522,13 @@ pub async fn update_task(
             let assignee_valid: bool = sqlx::query_scalar(
                 "SELECT (p.leader_id = $1 OR EXISTS (
                     SELECT 1 FROM project_members pm
-                    WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                    WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
                  ))
                  FROM project p WHERE p.id = $2",
             )
             .bind(*uid)
             .bind(project_id)
+            .bind(Permission::EXECUTE.as_i64())
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -651,12 +660,13 @@ pub async fn delete_task(task_id: i64) -> Result<(), ServerFnError> {
         let can_delete: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 32) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(project_id)
+        .bind(Permission::ADMIN.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -706,12 +716,13 @@ pub async fn set_task_status(task_id: u64, status: TaskStatus) -> Result<(), Ser
         let can_mutate: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 4) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(project_id)
+        .bind(Permission::EXECUTE.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -768,12 +779,13 @@ pub async fn get_task_messages(task_id: i64) -> Result<Vec<TaskMessage>, ServerF
         let can_read: bool = sqlx::query_scalar(
             "SELECT (p.leader_id = $1 OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $3)
              ))
              FROM project p WHERE p.id = $2",
         )
         .bind(user.id)
         .bind(pid)
+        .bind(Permission::READ.as_i64())
         .fetch_optional(pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {e}")))?
@@ -818,7 +830,7 @@ pub async fn post_task_message(task_id: i64, msg: String) -> Result<TaskMessage,
             $1,
             COALESCE((SELECT MAX(msg_id) FROM task_message WHERE task_id = $1), 0) + 1,
             $2,
-            EXTRACT(EPOCH FROM NOW())::BIGINT,
+            NOW(),
             $3
          )
          RETURNING task_id, msg_id, author_id, $4::TEXT AS author_name, created_at, msg",

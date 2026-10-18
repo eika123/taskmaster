@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 use sqlx::PgPool;
+use crate::types::Permission;
 
 pub async fn check_project_perm(
     pool: &PgPool,
@@ -10,7 +11,7 @@ pub async fn check_project_perm(
     sqlx::query_scalar(
         "SELECT (p.leader_id = $1 OR EXISTS (
             SELECT 1 FROM project_members pm
-            WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & $2) != 0
+            WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $2)
          ))
          FROM project p WHERE p.id = $3",
     )
@@ -46,7 +47,7 @@ pub async fn can_view_project(
             p.leader_id = $1
             OR EXISTS (
                 SELECT 1 FROM project_members pm
-                WHERE pm.project_id = p.id AND pm.user_id = $1 AND (pm.permissions_mask & 1) != 0
+                WHERE pm.project_id = p.id AND pm.user_id = $1 AND has_perm(pm.permissions_mask, $2)
             )
             OR (p.owner_org_id IS NOT NULL AND EXISTS (
                 SELECT 1 FROM organization o
@@ -59,9 +60,10 @@ pub async fn can_view_project(
                 )
             ))
          )
-         FROM project p WHERE p.id = $2",
+         FROM project p WHERE p.id = $3",
     )
     .bind(user_id)
+    .bind(Permission::READ.as_i64())
     .bind(project_id)
     .fetch_optional(pool)
     .await

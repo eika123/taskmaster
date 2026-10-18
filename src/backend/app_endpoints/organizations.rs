@@ -1,5 +1,8 @@
 use dioxus::prelude::*;
-use crate::types::{Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation, OrgRoleRuleItem};
+use crate::types::{
+    has_perm, Organization, OrganizationMember, OrganizationPendingInvite, OrgProjectAffiliation,
+    OrgRoleRuleItem, Permission,
+};
 
 #[cfg(feature = "server")]
 use crate::backend::app_endpoints::auth::get_auth_user;
@@ -133,7 +136,7 @@ pub async fn get_organization_members(
         user_name: String,
         user_email: String,
         role: String,
-        joined_at: i64,
+        joined_at: chrono::DateTime<chrono::Utc>,
         roles_csv: Option<String>,
     }
 
@@ -226,11 +229,12 @@ pub async fn remove_organization_member(
                WHERE other.project_id = p.id
                  AND other.user_id = $1
                  AND other.source_org_id != $2
-                 AND (prd.permissions_mask & 4) != 0
+                 AND has_perm(prd.permissions_mask, $3)
            )",
     )
     .bind(member_user_id)
     .bind(organization_id)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Impact check failed: {e}")))?;
@@ -307,7 +311,7 @@ pub async fn invite_user_to_organization(
          ON CONFLICT(organization_id, invited_user_id) DO UPDATE SET
             role = EXCLUDED.role,
             message = EXCLUDED.message,
-            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
+            created_at = NOW()",
     )
     .bind(organization_id)
     .bind(invited_user_id)
@@ -404,10 +408,10 @@ pub async fn request_organization_governance_transfer(
 
     sqlx::query(
         "INSERT INTO organization_governance_transfer (organization_id, requested_new_governor, created_at)
-         VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::BIGINT)
+         VALUES ($1, $2, NOW())
          ON CONFLICT(organization_id) DO UPDATE SET
             requested_new_governor = EXCLUDED.requested_new_governor,
-            created_at = EXTRACT(EPOCH FROM NOW())::BIGINT",
+            created_at = NOW()",
     )
     .bind(organization_id)
     .bind(requested_new_governor)
@@ -484,7 +488,7 @@ pub async fn assign_organization_member_role(
 
     sqlx::query(
         "INSERT INTO organization_member_roles (organization_id, user_id, role, assigned_at)
-         VALUES ($1, $2, $3, EXTRACT(EPOCH FROM NOW())::BIGINT)
+         VALUES ($1, $2, $3, NOW())
          ON CONFLICT(organization_id, user_id, role) DO NOTHING",
     )
     .bind(organization_id)
@@ -533,12 +537,13 @@ pub async fn revoke_organization_member_role(
                WHERE other.project_id = p.id
                  AND other.user_id = $1
                  AND NOT (other.source_org_id = $2 AND other.source_org_role = $3)
-                 AND (prd.permissions_mask & 4) != 0
+                 AND has_perm(prd.permissions_mask, $4)
            )",
     )
     .bind(member_user_id)
     .bind(organization_id)
     .bind(&role)
+    .bind(Permission::EXECUTE.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Impact check failed: {e}")))?;
@@ -695,7 +700,7 @@ pub async fn get_organization_affiliated_projects(
 
     // Zero-knowledge / Need-to-know filtering:
     // If the caller is not governor/admin of the organization, ONLY return projects
-    // where the caller is the leader or has active read access (permissions_mask & 1 != 0).
+    // where the caller is the leader or has active read access (has_perm(permissions_mask, Permission::READ)).
     let rows = sqlx::query_as::<_, RawAffiliation>(
         "SELECT po.project_id, p.name AS project_name, po.relationship_type, po.max_granted_role,
                 (p.leader_id = $2) AS is_leader,
@@ -707,7 +712,7 @@ pub async fn get_organization_affiliated_projects(
          WHERE po.organization_id = $1
            AND (
                p.leader_id = $2
-               OR (pm.permissions_mask & 1) != 0
+               OR has_perm(pm.permissions_mask, $4)
                OR $3
            )
          ORDER BY p.name ASC",
@@ -715,6 +720,7 @@ pub async fn get_organization_affiliated_projects(
     .bind(organization_id)
     .bind(user.id)
     .bind(is_org_governor_or_admin)
+    .bind(Permission::READ.as_i64())
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(format!("Failed to fetch affiliated projects: {e}")))?;
@@ -723,7 +729,7 @@ pub async fn get_organization_affiliated_projects(
         .into_iter()
         .map(|r| {
             let has_access = r.is_leader
-                || r.permissions_mask.map(|m| (m & 1) != 0).unwrap_or(false)
+                || r.permissions_mask.map(|m| has_perm(m, Permission::READ)).unwrap_or(false)
                 || is_org_governor_or_admin;
             let user_role = if r.is_leader {
                 Some("Leader".to_string())

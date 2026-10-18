@@ -71,13 +71,13 @@ async fn test_project_leadership_and_task_messages() {
     .unwrap();
 
     // Step 3: Insert discussion messages using the composite primary key (task_id, msg_id)
-    sqlx::query("INSERT INTO task_message (task_id, msg_id, author_id, created_at, msg) VALUES ($1, 1, 2, EXTRACT(EPOCH FROM NOW())::BIGINT, 'Message 1')")
+    sqlx::query("INSERT INTO task_message (task_id, msg_id, author_id, created_at, msg) VALUES ($1, 1, 2, NOW(), 'Message 1')")
         .bind(task_id)
         .execute(pool)
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO task_message (task_id, msg_id, author_id, created_at, msg) VALUES ($1, 2, 1, EXTRACT(EPOCH FROM NOW())::BIGINT, 'Message 2')")
+    sqlx::query("INSERT INTO task_message (task_id, msg_id, author_id, created_at, msg) VALUES ($1, 2, 1, NOW(), 'Message 2')")
         .bind(task_id)
         .execute(pool)
         .await

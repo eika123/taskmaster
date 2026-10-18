@@ -103,6 +103,97 @@ pub struct Task {
     pub assignees: Vec<User>,
 }
 
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Permission(pub u64);
+
+impl Permission {
+    pub const READ: Self = Self(1);
+    pub const SUGGEST: Self = Self(2);
+    pub const EXECUTE: Self = Self(4);
+    pub const ASSIGN: Self = Self(8);
+    pub const MANAGE_MEMBERS: Self = Self(16);
+    pub const ADMIN: Self = Self(32);
+    pub const MANAGE_WORKFLOW: Self = Self(64);
+    pub const MODERATE_DISCUSSIONS: Self = Self(128);
+    pub const POST_ANNOUNCEMENTS: Self = Self(256);
+    pub const MESSAGE_MEMBERS: Self = Self(512);
+    pub const IGNORABLE_BY_MEMBERS: Self = Self(1024);
+
+    // Pre-composed role defaults:
+    pub const VIEWER_DEFAULT: Self = Self(Self::READ.0);
+    pub const MEMBER_DEFAULT: Self = Self(
+        Self::READ.0 | Self::SUGGEST.0 | Self::EXECUTE.0 | Self::ASSIGN.0 | Self::MESSAGE_MEMBERS.0 | Self::IGNORABLE_BY_MEMBERS.0
+    );
+    pub const LEGACY_MEMBER: Self = Self(15);
+    pub const LEGACY_ADMIN: Self = Self(63);
+    pub const ADMIN_DEFAULT: Self = Self(
+        Self::READ.0 | Self::SUGGEST.0 | Self::EXECUTE.0 | Self::ASSIGN.0 | Self::MANAGE_MEMBERS.0
+        | Self::ADMIN.0 | Self::MANAGE_WORKFLOW.0 | Self::MODERATE_DISCUSSIONS.0
+        | Self::POST_ANNOUNCEMENTS.0 | Self::MESSAGE_MEMBERS.0
+    );
+
+    #[inline]
+    pub const fn bits(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn as_i64(&self) -> i64 {
+        self.0 as i64
+    }
+
+    #[inline]
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    #[inline]
+    pub const fn contains(&self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    #[inline]
+    pub const fn intersects(&self, other: Self) -> bool {
+        (self.0 & other.0) != 0
+    }
+
+    #[inline]
+    pub const fn has(&self, other: Self) -> bool {
+        self.intersects(other)
+    }
+}
+
+impl std::ops::BitOr for Permission {
+    type Output = Self;
+    #[inline]
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitAnd for Permission {
+    type Output = Self;
+    #[inline]
+    fn bitand(self, rhs: Self) -> Self {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl std::ops::Not for Permission {
+    type Output = Self;
+    #[inline]
+    fn not(self) -> Self {
+        Self(!self.0)
+    }
+}
+
+#[inline]
+pub fn has_perm(mask: i64, required: Permission) -> bool {
+    (mask & required.as_i64()) != 0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct TaskMessage {
@@ -110,7 +201,7 @@ pub struct TaskMessage {
     pub msg_id: i64,
     pub author_id: Option<i64>,
     pub author_name: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
     pub msg: String,
 }
 
@@ -122,7 +213,7 @@ pub struct Organization {
     pub slug: String,
     pub governing_user_id: i64,
     pub governing_user_name: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -132,7 +223,7 @@ pub struct OrganizationMember {
     pub user_name: String,
     pub user_email: String,
     pub role: String,
-    pub joined_at: i64,
+    pub joined_at: DateTime<Utc>,
     #[serde(default)]
     pub roles: Vec<String>,
 }
@@ -146,7 +237,7 @@ pub struct OrganizationPendingInvite {
     pub invited_user_email: String,
     pub role: String,
     pub message: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -159,7 +250,7 @@ pub struct Project {
     pub owner_org_name: Option<String>,
     pub leader_id: i64,
     pub leader_name: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -173,7 +264,7 @@ pub struct ProjectMember {
     pub granted_by_org_role: bool,
     pub permissions_mask: i64,
     pub active_grant_key: Option<String>,
-    pub joined_at: i64,
+    pub joined_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -184,7 +275,7 @@ pub struct ProjectOrganization {
     pub organization_name: String,
     pub relationship_type: String,
     pub max_granted_role: String,
-    pub joined_at: i64,
+    pub joined_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -197,7 +288,7 @@ pub struct ProjectMemberGrant {
     pub source_org_id: Option<i64>,
     pub source_org_name: Option<String>,
     pub source_org_role: Option<String>,
-    pub granted_at: i64,
+    pub granted_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -273,7 +364,7 @@ pub struct ProjectInvitation {
     pub invited_by_name: String,
     pub role: String,
     pub message: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -286,7 +377,7 @@ pub struct OrganizationInvitation {
     pub invited_by_name: String,
     pub role: String,
     pub message: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -296,7 +387,7 @@ pub struct GovernanceTransferOffer {
     pub organization_name: String,
     pub requested_new_governor: i64,
     pub current_governor_name: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -306,7 +397,7 @@ pub struct ProjectLeadershipTransferOffer {
     pub project_name: String,
     pub requested_new_leader: i64,
     pub current_leader_name: String,
-    pub created_at: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

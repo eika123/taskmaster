@@ -5,7 +5,7 @@ use crate::backend::app_endpoints::{
 };
 use crate::components::assignee_search::{AssigneeBadgeList, AssigneeSearchDropdown};
 use crate::components::status_select::TaskStatusSelect;
-use crate::types::{Task, TaskStatus, User};
+use crate::types::{has_perm, Permission, Task, TaskStatus, User};
 use crate::Route;
 
 #[component]
@@ -43,13 +43,19 @@ pub fn TaskPage(id: i64) -> Element {
     };
 
     let can_edit = if pid.is_some() {
-        my_membership.as_ref().map(|m| (m.permissions_mask & 4) != 0).unwrap_or(false)
+        my_membership
+            .as_ref()
+            .map(|m| has_perm(m.permissions_mask, Permission::EXECUTE))
+            .unwrap_or(false)
     } else {
         true
     };
 
     let can_comment = if pid.is_some() {
-        my_membership.as_ref().map(|m| (m.permissions_mask & 2) != 0).unwrap_or(false)
+        my_membership
+            .as_ref()
+            .map(|m| has_perm(m.permissions_mask, Permission::SUGGEST))
+            .unwrap_or(false)
     } else {
         true
     };

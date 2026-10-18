@@ -1,26 +1,28 @@
-use dioxus::prelude::*;
-use crate::Route;
-use crate::components::column_selector::ColumnSelector;
+use super::column::TaskColumn;
+use super::modals::InlineCreateTaskModal;
+use super::org_modal::ProjectOrganizationsModal;
 use crate::backend::app_endpoints::{
     assign_task, delete_task, get_my_project_member, get_my_tasks, get_project,
     get_project_assignable_users, get_project_tasks, set_task_status, unassign_task,
 };
-use crate::types::TaskStatus;
-use super::column::TaskColumn;
-use super::modals::InlineCreateTaskModal;
-use super::org_modal::ProjectOrganizationsModal;
+use crate::components::column_selector::ColumnSelector;
 use crate::components::dashboard::ConfirmDeleteModal;
 use crate::components::projects::InviteProjectMemberModal;
+use crate::types::{has_perm, Permission, TaskStatus};
+use crate::Route;
+use dioxus::prelude::*;
 
 #[component]
 pub fn TaskView(project_id: Option<i64>) -> Element {
-    let mut selected_statuses = use_signal(|| vec![
-        TaskStatus::Suggested,
-        TaskStatus::Accepted,
-        TaskStatus::Assigned,
-        TaskStatus::InProgress,
-        TaskStatus::Finished,
-    ]);
+    let mut selected_statuses = use_signal(|| {
+        vec![
+            TaskStatus::Suggested,
+            TaskStatus::Accepted,
+            TaskStatus::Assigned,
+            TaskStatus::InProgress,
+            TaskStatus::Finished,
+        ]
+    });
 
     let pid = project_id;
     let mut tasks_resource = use_server_future(move || async move {
@@ -47,22 +49,17 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
         }
     })?;
 
-    let mut assignable_users_resource = use_server_future(move || async move {
-        get_project_assignable_users(pid).await
-    })?;
+    let mut assignable_users_resource =
+        use_server_future(move || async move { get_project_assignable_users(pid).await })?;
 
-    let mut task_list = use_signal(|| {
-        match &*tasks_resource.read() {
-            Some(Ok(list)) => list.clone(),
-            _ => Vec::new(),
-        }
+    let mut task_list = use_signal(|| match &*tasks_resource.read() {
+        Some(Ok(list)) => list.clone(),
+        _ => Vec::new(),
     });
 
-    let mut all_users = use_signal(|| {
-        match &*assignable_users_resource.read() {
-            Some(Ok(list)) => list.clone(),
-            _ => Vec::new(),
-        }
+    let mut all_users = use_signal(|| match &*assignable_users_resource.read() {
+        Some(Ok(list)) => list.clone(),
+        _ => Vec::new(),
     });
 
     use_effect(move || {
@@ -142,7 +139,10 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     // For standalone tasks (pid.is_none()), any authenticated user can create/edit tasks.
     // For project tasks, the user must have PERM_EDIT_TASKS (bit 4) in permissions_mask.
     let can_mutate = if pid.is_some() {
-        my_membership.as_ref().map(|m| (m.permissions_mask & 4) != 0).unwrap_or(false)
+        my_membership
+            .as_ref()
+            .map(|m| has_perm(m.permissions_mask, Permission::EXECUTE))
+            .unwrap_or(false)
     } else {
         true
     };
@@ -150,19 +150,39 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
     rsx! {
         div { class: "task-view",
             if let Some(Err(err)) = &*project_resource.read() {
-                div { class: "dashboard-panel", style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
-                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);", "Access Denied" }
-                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);", "{err}" }
+                div {
+                    class: "dashboard-panel",
+                    style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
+                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);",
+                        "Access Denied"
+                    }
+                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);",
+                        "{err}"
+                    }
                     div { style: "margin-top: 16px;",
-                        Link { to: Route::TasksDashboardPage {}, class: "btn-back-link", "← Return to My Tasks" }
+                        Link {
+                            to: Route::TasksDashboardPage {},
+                            class: "btn-back-link",
+                            "← Return to My Tasks"
+                        }
                     }
                 }
             } else if let Some(Err(err)) = &*tasks_resource.read() {
-                div { class: "dashboard-panel", style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
-                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);", "Access Denied" }
-                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);", "{err}" }
+                div {
+                    class: "dashboard-panel",
+                    style: "border: 1px solid var(--danger-bg); margin-top: 16px; background-color: var(--bg-surface); padding: 24px; border-radius: var(--radius-md);",
+                    h2 { style: "color: var(--danger); margin-bottom: 8px; font-size: var(--font-size-h3);",
+                        "Access Denied"
+                    }
+                    p { style: "color: var(--text-muted); font-size: var(--font-size-body);",
+                        "{err}"
+                    }
                     div { style: "margin-top: 16px;",
-                        Link { to: Route::TasksDashboardPage {}, class: "btn-back-link", "← Return to My Tasks" }
+                        Link {
+                            to: Route::TasksDashboardPage {},
+                            class: "btn-back-link",
+                            "← Return to My Tasks"
+                        }
                     }
                 }
             } else {
@@ -170,206 +190,211 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
                     div {
                         if let Some(proj) = &project_info {
                             h1 { class: "task-view-title", "{proj.name}" }
-                        div { style: "display: flex; gap: 8px; align-items: center; margin-top: 4px;",
-                            span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
-                                "Led by "
-                                strong { "{proj.leader_name}" }
-                            }
-                            if let Some(org_name) = &proj.owner_org_name {
-                                span { class: "task-detail-status status-accepted badge-sm",
-                                    "{org_name}"
+                            div { style: "display: flex; gap: 8px; align-items: center; margin-top: 4px;",
+                                span { style: "color: var(--text-muted); font-size: var(--font-size-meta);",
+                                    "Led by "
+                                    strong { "{proj.leader_name}" }
                                 }
-                            } else {
-                                span { class: "task-detail-status status-suggested badge-sm",
-                                    "Standalone"
+                                if let Some(org_name) = &proj.owner_org_name {
+                                    span { class: "task-detail-status status-accepted badge-sm",
+                                        "{org_name}"
+                                    }
+                                } else {
+                                    span { class: "task-detail-status status-suggested badge-sm",
+                                        "Standalone"
+                                    }
+                                }
+                            }
+                        } else {
+                            h1 { class: "task-view-title", "My Tasks" }
+                            p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
+                                "Tasks assigned to or created by you across all projects"
+                            }
+                        }
+                    }
+
+                    div { style: "display: flex; gap: 10px; align-items: center;",
+                        if pid.is_some() && can_mutate {
+                            button {
+                                r#type: "button",
+                                class: "btn-task-cancel",
+                                onclick: move |_| {
+                                    let curr = *show_invite_modal.read();
+                                    show_invite_modal.set(!curr);
+                                },
+                                "👥 Invite Member"
+                            }
+                        }
+                        if pid.is_some() && project_info.as_ref().map(|p| p.leader_id) == current_user_id {
+                            Link {
+                                to: Route::ProjectManagePage {
+                                    project_id: pid.unwrap(),
+                                },
+                                class: "btn-task-cancel",
+                                style: "text-decoration: none;",
+                                "⚙ Manage Project"
+                            }
+                            button {
+                                r#type: "button",
+                                class: "btn-task-cancel",
+                                onclick: move |_| {
+                                    let curr = *show_orgs_modal.read();
+                                    show_orgs_modal.set(!curr);
+                                },
+                                "🏢 Organizations"
+                            }
+                            button {
+                                r#type: "button",
+                                class: "btn-task-cancel",
+                                style: "color: var(--danger); border-color: var(--danger-bg);",
+                                onclick: move |_| {
+                                    show_delete_modal.set(true);
+                                },
+                                "🗑 Delete Project"
+                            }
+                        }
+                        if can_mutate {
+                            button {
+                                r#type: "button",
+                                class: "btn-create-task",
+                                onclick: move |_| {
+                                    let curr = *show_new_task.read();
+                                    show_new_task.set(!curr);
+                                },
+                                span { class: "btn-create-icon", "+" }
+                                " New Task"
+                            }
+                        }
+                    }
+                }
+
+                if *show_delete_modal.read() {
+                    if let (Some(target_pid), Some(pinfo)) = (pid, &project_info) {
+                        {
+                            let pname = pinfo.name.clone();
+                            rsx! {
+                                ConfirmDeleteModal {
+                                    entity_type: "project".to_string(),
+                                    entity_name: pname,
+                                    on_close: move |_| {
+                                        show_delete_modal.set(false);
+                                        delete_proj_err.set(None);
+                                    },
+                                    on_confirm: move |confirmation: String| {
+                                        is_deleting_project.set(true);
+                                        delete_proj_err.set(None);
+                                        let nav = nav.clone();
+                                        spawn(async move {
+                                            match crate::backend::app_endpoints::delete_project(target_pid, confirmation)
+                                                .await
+                                            {
+                                                Ok(_) => {
+                                                    is_deleting_project.set(false);
+                                                    show_delete_modal.set(false);
+                                                    nav.push(crate::Route::DashboardPage {});
+                                                }
+                                                Err(e) => {
+                                                    is_deleting_project.set(false);
+                                                    delete_proj_err.set(Some(e.to_string()));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    is_deleting: *is_deleting_project.read(),
+                                    error: (*delete_proj_err.read()).clone(),
                                 }
                             }
                         }
-                    } else {
-                        h1 { class: "task-view-title", "My Tasks" }
-                        p { style: "margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-size-body-sm);",
-                            "Tasks assigned to or created by you across all projects"
-                        }
                     }
                 }
 
-                div { style: "display: flex; gap: 10px; align-items: center;",
-                    if pid.is_some() && can_mutate {
-                        button {
-                            r#type: "button",
-                            class: "btn-task-cancel",
-                            onclick: move |_| {
-                                let curr = *show_invite_modal.read();
-                                show_invite_modal.set(!curr);
-                            },
-                            "👥 Invite Member"
-                        }
-                    }
-                    if pid.is_some() && project_info.as_ref().map(|p| p.leader_id) == current_user_id {
-                        Link {
-                            to: Route::ProjectManagePage { project_id: pid.unwrap() },
-                            class: "btn-task-cancel",
-                            style: "text-decoration: none;",
-                            "⚙ Manage Project"
-                        }
-                        button {
-                            r#type: "button",
-                            class: "btn-task-cancel",
-                            onclick: move |_| {
-                                let curr = *show_orgs_modal.read();
-                                show_orgs_modal.set(!curr);
-                            },
-                            "🏢 Organizations"
-                        }
-                        button {
-                            r#type: "button",
-                            class: "btn-task-cancel",
-                            style: "color: var(--danger); border-color: var(--danger-bg);",
-                            onclick: move |_| {
-                                show_delete_modal.set(true);
-                            },
-                            "🗑 Delete Project"
-                        }
-                    }
-                    if can_mutate {
-                        button {
-                            r#type: "button",
-                            class: "btn-create-task",
-                            onclick: move |_| {
-                                let curr = *show_new_task.read();
-                                show_new_task.set(!curr);
-                            },
-                            span { class: "btn-create-icon", "+" }
-                            " New Task"
-                        }
+                if *show_new_task.read() {
+                    InlineCreateTaskModal {
+                        project_id: pid,
+                        on_close: move |_| show_new_task.set(false),
+                        on_created: move |_| {
+                            show_new_task.set(false);
+                            tasks_resource.restart();
+                        },
                     }
                 }
-            }
 
-            if *show_delete_modal.read() {
-                if let (Some(target_pid), Some(pinfo)) = (pid, &project_info) {
-                    {
-                        let pname = pinfo.name.clone();
-                        rsx! {
-                            ConfirmDeleteModal {
-                                entity_type: "project".to_string(),
-                                entity_name: pname,
-                                on_close: move |_| {
-                                    show_delete_modal.set(false);
-                                    delete_proj_err.set(None);
-                                },
-                                on_confirm: move |confirmation: String| {
-                                    is_deleting_project.set(true);
-                                    delete_proj_err.set(None);
-                                    let nav = nav.clone();
-                                    spawn(async move {
-                                        match crate::backend::app_endpoints::delete_project(target_pid, confirmation).await {
-                                            Ok(_) => {
-                                                is_deleting_project.set(false);
-                                                show_delete_modal.set(false);
-                                                nav.push(crate::Route::DashboardPage {});
-                                            }
-                                            Err(e) => {
-                                                is_deleting_project.set(false);
-                                                delete_proj_err.set(Some(e.to_string()));
-                                            }
-                                        }
-                                    });
-                                },
-                                is_deleting: *is_deleting_project.read(),
-                                error: (*delete_proj_err.read()).clone(),
+                if *show_invite_modal.read() && pid.is_some() {
+                    InviteProjectMemberModal {
+                        project_id: pid.unwrap(),
+                        project_name: project_info.as_ref().map(|p| p.name.clone()),
+                        on_close: move |_| show_invite_modal.set(false),
+                        on_invited: move |_| {
+                            show_invite_modal.set(false);
+                            assignable_users_resource.restart();
+                        },
+                    }
+                }
+
+                if *show_orgs_modal.read() {
+                    if let (Some(target_pid), Some(pinfo)) = (pid, &project_info) {
+                        {
+                            let pname = pinfo.name.clone();
+                            rsx! {
+                                ProjectOrganizationsModal {
+                                    project_id: target_pid,
+                                    project_name: pname,
+                                    on_close: move |_| show_orgs_modal.set(false),
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if *show_new_task.read() {
-                InlineCreateTaskModal {
-                    project_id: pid,
-                    on_close: move |_| show_new_task.set(false),
-                    on_created: move |_| {
-                        show_new_task.set(false);
-                        tasks_resource.restart();
+                // Interactive Column Selector
+                ColumnSelector {
+                    selected_statuses: active_statuses.clone(),
+                    on_toggle: move |status: TaskStatus| {
+                        let mut list = selected_statuses();
+                        if let Some(pos) = list.iter().position(|&s| s == status) {
+                            list.remove(pos);
+                        } else {
+                            list.push(status);
+                        }
+                        selected_statuses.set(list);
+                    },
+                    on_select_all: move |_| {
+                        selected_statuses
+                            .set(
+                                vec![
+                                    TaskStatus::Suggested,
+                                    TaskStatus::Accepted,
+                                    TaskStatus::Assigned,
+                                    TaskStatus::InProgress,
+                                    TaskStatus::Finished,
+                                ],
+                            );
+                    },
+                    on_clear: move |_| {
+                        selected_statuses.set(Vec::new());
                     },
                 }
-            }
 
-            if *show_invite_modal.read() && pid.is_some() {
-                InviteProjectMemberModal {
-                    project_id: pid.unwrap(),
-                    project_name: project_info.as_ref().map(|p| p.name.clone()),
-                    on_close: move |_| show_invite_modal.set(false),
-                    on_invited: move |_| {
-                        show_invite_modal.set(false);
-                        assignable_users_resource.restart();
-                    },
-                }
-            }
-
-            if *show_orgs_modal.read() {
-                if let (Some(target_pid), Some(pinfo)) = (pid, &project_info) {
-                    {
-                        let pname = pinfo.name.clone();
-                        rsx! {
-                            ProjectOrganizationsModal {
-                                project_id: target_pid,
-                                project_name: pname,
-                                on_close: move |_| show_orgs_modal.set(false),
-                            }
-                        }
+                // Columns Container: Side-by-side slideable board
+                if active_statuses.is_empty() {
+                    div { class: "no-columns-notice",
+                        p { "No columns selected. Click one or more status pills above to view tasks." }
                     }
-                }
-            }
-
-            // Interactive Column Selector
-            ColumnSelector {
-                selected_statuses: active_statuses.clone(),
-                on_toggle: move |status: TaskStatus| {
-                    let mut list = selected_statuses();
-                    if let Some(pos) = list.iter().position(|&s| s == status) {
-                        list.remove(pos);
-                    } else {
-                        list.push(status);
-                    }
-                    selected_statuses.set(list);
-                },
-                on_select_all: move |_| {
-                    selected_statuses
-                        .set(
-                            vec![
-                                TaskStatus::Suggested,
-                                TaskStatus::Accepted,
-                                TaskStatus::Assigned,
-                                TaskStatus::InProgress,
-                                TaskStatus::Finished,
-                            ],
-                        );
-                },
-                on_clear: move |_| {
-                    selected_statuses.set(Vec::new());
-                },
-            }
-
-            // Columns Container: Side-by-side slideable board
-            if active_statuses.is_empty() {
-                div { class: "no-columns-notice",
-                    p { "No columns selected. Click one or more status pills above to view tasks." }
-                }
-            } else {
-                div { class: "task-board-scroll-container",
-                    div { class: "task-columns-row",
-                        for status in active_statuses {
-                            TaskColumn {
-                                key: "{status.as_str()}",
-                                status,
-                                tasks: current_tasks.clone(),
-                                all_users: current_users.clone(),
-                                can_mutate,
-                                on_dismiss: on_dismiss_handler,
-                                on_status_change: on_status_change_handler,
-                                on_assign: on_assign_handler,
-                                on_unassign: on_unassign_handler,
+                } else {
+                    div { class: "task-board-scroll-container",
+                        div { class: "task-columns-row",
+                            for status in active_statuses {
+                                TaskColumn {
+                                    key: "{status.as_str()}",
+                                    status,
+                                    tasks: current_tasks.clone(),
+                                    all_users: current_users.clone(),
+                                    can_mutate,
+                                    on_dismiss: on_dismiss_handler,
+                                    on_status_change: on_status_change_handler,
+                                    on_assign: on_assign_handler,
+                                    on_unassign: on_unassign_handler,
+                                }
                             }
                         }
                     }
@@ -378,5 +403,3 @@ pub fn TaskView(project_id: Option<i64>) -> Element {
         }
     }
 }
-}
-

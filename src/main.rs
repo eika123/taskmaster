@@ -48,16 +48,16 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 #[cfg(feature = "server")]
 fn main() {
     dioxus::serve(|| async move {
-        let pool = crate::types::get_db().await.clone();
-        let session_store = crate::types::create_session_store(pool.clone()).await?;
-        let auth_layer = crate::types::create_auth_layer(pool);
+        let pool = get_db().await.clone();
+        let session_store = create_session_store(pool.clone()).await?;
+        let auth_layer = create_auth_layer(pool);
         let session_layer = axum_session::SessionLayer::new(session_store);
 
         let app_router = dioxus::server::router(App)
-            .layer(axum::middleware::from_fn(crate::types::auth_guard_middleware))
+            .layer(axum::middleware::from_fn(auth_guard_middleware))
             .layer(auth_layer)
             .layer(session_layer)
-            .layer(axum::middleware::from_fn(crate::types::auth_header_to_cookie_middleware));
+            .layer(axum::middleware::from_fn(auth_header_to_cookie_middleware));
 
         Ok(app_router)
     });
@@ -72,7 +72,7 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    let mut user = use_signal(|| None::<crate::types::User>);
+    let mut user = use_signal(|| None::<User>);
     let mut token = use_signal(|| None::<String>);
     let mut is_loading = use_signal(|| true);
 
