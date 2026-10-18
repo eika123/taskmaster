@@ -13,6 +13,7 @@
 mod auth_tests;
 mod guardrails_tests;
 mod database_foundations_tests;
+mod workflow_tests;
 mod org_project_access_tests;
 mod organizations_tests;
 mod projects_tests;

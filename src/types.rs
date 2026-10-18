@@ -1,26 +1,45 @@
+/// Canonical task execution status within the legacy 5-state Kanban lifecycle.
+///
+/// During Milestone M1 (Expand Phase), `TaskStatus` is dual-written alongside
+/// `project_workflow_status.id` to guarantee zero-downtime backward compatibility
+/// across existing Kanban boards and client RPC contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    /// Newly proposed task awaiting review or triage (`allows_assignment = false`).
     Suggested,
+    /// Accepted task ready to be scheduled or assigned.
     Accepted,
+    /// Task assigned to one or more contributors.
     Assigned,
+    /// Active work in progress (`requires_assignee = true`).
     InProgress,
+    /// Terminal state denoting successful completion.
     Finished,
 }
 
+// ============================================================================
+// SQLx Database Mapping: TaskStatus <-> PostgreSQL TEXT
+// ============================================================================
+
 #[cfg(feature = "server")]
+/// Declares SQL type metadata for [`TaskStatus`], mapping it to PostgreSQL `TEXT`/`VARCHAR`.
 impl sqlx::Type<sqlx::Postgres> for TaskStatus {
+    /// Returns the database type metadata for PostgreSQL, matching standard `TEXT`.
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
     }
 
+    /// Verifies whether a PostgreSQL column type is compatible with this enum's text representation.
     fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
         <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
     }
 }
 
 #[cfg(feature = "server")]
+/// Encodes [`TaskStatus`] into the PostgreSQL wire format by serializing its snake_case string representation.
 impl<'q> sqlx::Encode<'q, sqlx::Postgres> for TaskStatus {
+    /// Encodes the enum variant as a string slice into the PostgreSQL argument buffer.
     fn encode_by_ref(
         &self,
         buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -30,7 +49,9 @@ impl<'q> sqlx::Encode<'q, sqlx::Postgres> for TaskStatus {
 }
 
 #[cfg(feature = "server")]
+/// Decodes a [`TaskStatus`] from a PostgreSQL text column or query result.
 impl<'r> sqlx::Decode<'r, sqlx::Postgres> for TaskStatus {
+    /// Parses a database string value into the matching [`TaskStatus`] variant, returning an error for unknown strings.
     fn decode(
         value: sqlx::postgres::PgValueRef<'r>,
     ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
@@ -40,6 +61,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for TaskStatus {
 }
 
 impl TaskStatus {
+    /// Returns the canonical snake_case string literal matching the PostgreSQL `task.status` column check constraint.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Suggested => "suggested",
@@ -52,6 +74,7 @@ impl TaskStatus {
 }
 
 impl std::fmt::Display for TaskStatus {
+    /// Writes the canonical snake_case string to the formatter.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -60,6 +83,7 @@ impl std::fmt::Display for TaskStatus {
 impl std::str::FromStr for TaskStatus {
     type Err = String;
 
+    /// Attempts to parse standard snake_case status names (`suggested`, `accepted`, `assigned`, `in_progress`, `finished`).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "suggested" => Ok(Self::Suggested),
@@ -90,6 +114,240 @@ impl Default for User {
     }
 }
 
+use chrono::{DateTime, Utc};
+
+/// High-level workflow category grouping custom project statuses for cross-project dashboards.
+///
+/// While every project may define custom status names (e.g. "Consumables Farming", "Code Review"),
+/// the global dashboard and rollup views aggregate tasks by their semantic [`StatusCategory`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusCategory {
+    /// Backlog, triage, or unstarted tasks.
+    Todo,
+    /// Active work or implementation in progress.
+    InProgress,
+    /// Peer review, QA verification, or testing.
+    Review,
+    /// Successfully completed or delivered work.
+    Done,
+    /// Archived, cancelled, or deprecated tasks.
+    Archived,
+}
+
+// ============================================================================
+// SQLx Database Mapping: StatusCategory <-> PostgreSQL TEXT
+// ============================================================================
+
+#[cfg(feature = "server")]
+/// Declares SQL type metadata for [`StatusCategory`], mapping it to PostgreSQL `TEXT`/`VARCHAR`.
+impl sqlx::Type<sqlx::Postgres> for StatusCategory {
+    /// Returns PostgreSQL type metadata matching standard `TEXT`.
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    /// Verifies compatibility with PostgreSQL string column types.
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "server")]
+/// Encodes [`StatusCategory`] into the PostgreSQL wire format as its snake_case string.
+impl<'q> sqlx::Encode<'q, sqlx::Postgres> for StatusCategory {
+    /// Writes the category string slice into the PostgreSQL argument buffer.
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+        <&str as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&self.as_str(), buf)
+    }
+}
+
+#[cfg(feature = "server")]
+/// Decodes a [`StatusCategory`] from a PostgreSQL text column or query result.
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for StatusCategory {
+    /// Decodes a raw database text value into the corresponding [`StatusCategory`] variant.
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        let s = <&str as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
+        s.parse::<Self>().map_err(Into::into)
+    }
+}
+
+impl StatusCategory {
+    /// Returns the canonical snake_case string literal matching the PostgreSQL `project_workflow_status.category` check constraint.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Todo => "todo",
+            Self::InProgress => "in_progress",
+            Self::Review => "review",
+            Self::Done => "done",
+            Self::Archived => "archived",
+        }
+    }
+}
+
+/// Formats the [`StatusCategory`] as its canonical string for display and logging.
+impl std::fmt::Display for StatusCategory {
+    /// Writes the canonical snake_case string to the formatter.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Parses a string into a [`StatusCategory`] variant.
+impl std::str::FromStr for StatusCategory {
+    type Err = String;
+
+    /// Parses string inputs such as `todo`, `in_progress`, `review`, `done`, `archived`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "todo" => Ok(Self::Todo),
+            "in_progress" | "inprogress" => Ok(Self::InProgress),
+            "review" => Ok(Self::Review),
+            "done" => Ok(Self::Done),
+            "archived" => Ok(Self::Archived),
+            other => Err(format!("Unknown status category: '{other}'")),
+        }
+    }
+}
+
+/// Visual badge and column highlight styling for workflow statuses on Kanban boards.
+///
+/// Maps directly to semantic CSS utility styles and column headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BadgeVariant {
+    Default,
+    Info,
+    Success,
+    Warning,
+    Danger,
+    Purple,
+    Teal,
+}
+
+// ============================================================================
+// SQLx Database Mapping: BadgeVariant <-> PostgreSQL TEXT
+// ============================================================================
+
+#[cfg(feature = "server")]
+/// Declares SQL type metadata for [`BadgeVariant`], mapping it to PostgreSQL `TEXT`/`VARCHAR`.
+impl sqlx::Type<sqlx::Postgres> for BadgeVariant {
+    /// Returns PostgreSQL type metadata matching standard `TEXT`.
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    /// Verifies compatibility with PostgreSQL string column types.
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+#[cfg(feature = "server")]
+/// Encodes [`BadgeVariant`] into the PostgreSQL wire format as its snake_case string.
+impl<'q> sqlx::Encode<'q, sqlx::Postgres> for BadgeVariant {
+    /// Writes the badge variant string slice into the PostgreSQL argument buffer.
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+        <&str as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&self.as_str(), buf)
+    }
+}
+
+#[cfg(feature = "server")]
+/// Decodes a [`BadgeVariant`] from a PostgreSQL text column or query result.
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for BadgeVariant {
+    /// Decodes a raw database text value into the corresponding [`BadgeVariant`] variant.
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        let s = <&str as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
+        s.parse::<Self>().map_err(Into::into)
+    }
+}
+
+impl BadgeVariant {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Danger => "danger",
+            Self::Purple => "purple",
+            Self::Teal => "teal",
+        }
+    }
+}
+
+impl std::fmt::Display for BadgeVariant {
+    /// Writes the canonical snake_case string to the formatter.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for BadgeVariant {
+    type Err = String;
+
+    /// Parses string inputs such as `default`, `info`, `success`, `warning`, `danger`, `purple`, `teal`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "default" => Ok(Self::Default),
+            "info" => Ok(Self::Info),
+            "success" => Ok(Self::Success),
+            "warning" => Ok(Self::Warning),
+            "danger" => Ok(Self::Danger),
+            "purple" => Ok(Self::Purple),
+            "teal" => Ok(Self::Teal),
+            other => Err(format!("Unknown badge variant: '{other}'")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct WorkflowStatusDto {
+    pub id: i64,
+    pub project_id: i64,
+    pub name: String,
+    pub category: StatusCategory,
+    pub badge_variant: BadgeVariant,
+    pub position: i64,
+    pub wip_limit: Option<i32>,
+    pub is_initial: bool,
+    pub allows_assignment: bool,
+    pub requires_assignee: bool,
+    #[serde(default)]
+    pub task_count: i64,
+    #[serde(default)]
+    pub wip_exceeded: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+impl WorkflowStatusDto {
+    pub fn with_task_count(mut self, count: i64) -> Self {
+        self.task_count = count;
+        self.wip_exceeded = self.wip_limit.is_some_and(|limit| count > limit as i64);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+pub struct ProjectWorkflowTransitionDto {
+    pub project_id: i64,
+    pub from_status_id: i64,
+    pub to_status_id: i64,
+    pub required_permission: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Task {
     pub id: i64,
@@ -100,10 +358,18 @@ pub struct Task {
     pub author_name: String,
     pub description: String,
     pub status: TaskStatus,
+    #[serde(default)]
+    pub workflow_status_id: Option<i64>,
+    #[serde(default)]
+    pub start_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub due_date: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub estimated_hours: Option<i32>,
+    #[serde(default)]
+    pub progress_percent: i32,
     pub assignees: Vec<User>,
 }
-
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Permission(pub u64);
@@ -165,8 +431,10 @@ impl Permission {
     }
 }
 
+/// Combines two permission masks using bitwise OR (`|`).
 impl std::ops::BitOr for Permission {
     type Output = Self;
+    /// Returns the union of both permission sets.
     #[inline]
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
@@ -175,6 +443,7 @@ impl std::ops::BitOr for Permission {
 
 impl std::ops::BitAnd for Permission {
     type Output = Self;
+    /// Returns the common permissions present in both sets.
     #[inline]
     fn bitand(self, rhs: Self) -> Self {
         Self(self.0 & rhs.0)
@@ -183,12 +452,17 @@ impl std::ops::BitAnd for Permission {
 
 impl std::ops::Not for Permission {
     type Output = Self;
+    /// Returns the inverted bitmask.
     #[inline]
     fn not(self) -> Self {
         Self(!self.0)
     }
 }
 
+/// Checks whether an arbitrary integer bitmask contains the required [`Permission`].
+///
+/// Returns `true` if `(mask & required) != 0`, matching the behavior of the
+/// database SQL helper function `has_perm(mask, required)`.
 #[inline]
 pub fn has_perm(mask: i64, required: Permission) -> bool {
     (mask & required.as_i64()) != 0
