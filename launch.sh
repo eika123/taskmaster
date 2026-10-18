@@ -27,27 +27,114 @@ if [[ -f .env ]]; then
 fi
 set +a
 
-ACTION="${1:-up}"
+start_db() {
+    echo "==> Starting PostgreSQL container..."
+    docker compose up -d postgres
+    echo "==> Waiting for PostgreSQL to become healthy..."
+    until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-todolist}" -d "${POSTGRES_DB:-todolist}" >/dev/null 2>&1; do
+        sleep 1
+    done
+    echo "==> PostgreSQL is ready on ${POSTGRES_HOST:-127.0.0.1}:${POSTGRES_PORT:-5432}"
+}
+
+stop_containers() {
+    echo "==> Spinning down containerized environment..."
+    docker compose down
+}
+
+# 3. Parse options and action
+ACTION=""
+THREADS="${THREADS:-}"
+EXTRA_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --help|-h|help)
+            echo "Usage: $0 [up|down|db|logs|--test-backend|--test-frontend|--test-all] [--threads <N>] [extra-cargo-flags...]"
+            exit 0
+            ;;
+        --threads=*)
+            THREADS="${1#*=}"
+            shift
+            ;;
+        --threads|-t)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an integer argument (number of threads)"
+                exit 1
+            fi
+            THREADS="$2"
+            shift 2
+            ;;
+        up|start|down|stop|db|logs|--test-backend|test-backend|--test-frontend|test-frontend|--test-all|test-all)
+            if [[ -z "$ACTION" ]]; then
+                ACTION="$1"
+            else
+                EXTRA_ARGS+=("$1")
+            fi
+            shift
+            ;;
+        *)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+ACTION="${ACTION:-up}"
+
+# Prepare cargo test runner flags
+TEST_FLAGS=()
+if [[ -n "$THREADS" ]]; then
+    TEST_FLAGS+=("--test-threads=$THREADS")
+fi
+if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+    TEST_FLAGS+=("${EXTRA_ARGS[@]}")
+fi
 
 case "$ACTION" in
     down|stop)
-        echo "==> Stopping containerized environment..."
-        docker compose down
+        stop_containers
         exit 0
         ;;
     db)
-        echo "==> Starting PostgreSQL container only..."
-        docker compose up -d postgres
-        echo "==> Waiting for PostgreSQL to become healthy..."
-        until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-todolist}" -d "${POSTGRES_DB:-todolist}" >/dev/null 2>&1; do
-            sleep 1
-        done
-        echo "==> PostgreSQL is ready on ${POSTGRES_HOST:-127.0.0.1}:${POSTGRES_PORT:-5432}"
+        start_db
         exit 0
         ;;
     logs)
         docker compose logs -f
         exit 0
+        ;;
+    --test-backend|test-backend)
+        start_db
+        trap 'stop_containers' EXIT
+        if [[ -n "$THREADS" ]]; then
+            echo "==> Running backend test suite with ${THREADS} thread(s)..."
+        else
+            echo "==> Running backend test suite (multi-threaded default)..."
+        fi
+        cargo test --features server -- backend types "${TEST_FLAGS[@]}"
+        ;;
+    --test-frontend|test-frontend)
+        if [[ -n "$THREADS" ]]; then
+            echo "==> Running frontend SSR test suite with ${THREADS} thread(s)..."
+        else
+            echo "==> Running frontend SSR test suite (multi-threaded default)..."
+        fi
+        cargo test --features server -- components::ssr_tests "${TEST_FLAGS[@]}"
+        ;;
+    --test-all|test-all)
+        start_db
+        trap 'stop_containers' EXIT
+        if [[ -n "$THREADS" ]]; then
+            echo "==> Running all tests with ${THREADS} thread(s)..."
+        else
+            echo "==> Running all tests (multi-threaded default)..."
+        fi
+        if [[ ${#TEST_FLAGS[@]} -gt 0 ]]; then
+            cargo test --features server -- "${TEST_FLAGS[@]}"
+        else
+            cargo test --features server
+        fi
         ;;
     up|start)
         echo "==> Building Dioxus fullstack web & server bundle..."
@@ -71,7 +158,7 @@ case "$ACTION" in
         exit 1
         ;;
     *)
-        echo "Usage: $0 [up|down|db|logs]"
+        echo "Usage: $0 [up|down|db|logs|--test-backend|--test-frontend|--test-all] [--threads <N>] [extra-cargo-flags...]"
         exit 1
         ;;
 esac

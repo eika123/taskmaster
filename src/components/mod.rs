@@ -25,3 +25,5 @@ pub use dashboard::*;
 pub use organizations::*;
 pub use projects::*;
 
+#[cfg(test)]
+mod ssr_tests;
