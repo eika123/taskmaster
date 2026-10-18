@@ -1,5 +1,5 @@
 [package]
-name = "todolist"
+name = "taskmaster"
 version = "0.1.0"
 authors = ["Eindride Ilmari Kjersheim <eindride.kjersheim@gmail.com>"]
 edition = "2021"

@@ -1,20 +1,20 @@
 services:
   postgres:
     image: postgres:18-alpine
-    container_name: todolist-postgres
+    container_name: taskmaster-postgres
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-todolist}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-todolist_secret}
-      POSTGRES_DB: ${POSTGRES_DB:-todolist}
+      POSTGRES_USER: ${POSTGRES_USER:-taskmaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taskmaster_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-taskmaster}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-todolist} -d $${POSTGRES_DB:-todolist}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-taskmaster} -d $${POSTGRES_DB:-taskmaster}"]
       interval: 2s
       timeout: 5s
       retries: 15
@@ -25,7 +25,7 @@ services:
       dockerfile: Dockerfile
       args:
         DX_PROFILE: ${DX_PROFILE:-debug}
-    container_name: todolist-app
+    container_name: taskmaster-app
     restart: unless-stopped
     depends_on:
       postgres:
@@ -37,10 +37,10 @@ services:
       PORT: 8080
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-todolist}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-todolist_secret}
-      POSTGRES_DB: ${POSTGRES_DB:-todolist}
-      DATABASE_URL: postgres://${POSTGRES_USER:-todolist}:${POSTGRES_PASSWORD:-todolist_secret}@postgres:5432/${POSTGRES_DB:-todolist}
+      POSTGRES_USER: ${POSTGRES_USER:-taskmaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taskmaster_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-taskmaster}
+      DATABASE_URL: postgres://${POSTGRES_USER:-taskmaster}:${POSTGRES_PASSWORD:-taskmaster_secret}@postgres:5432/${POSTGRES_DB:-taskmaster}
       TODOLIST_PEPPER: ${TODOLIST_PEPPER:-dev-default-pepper-change-in-prod}
     ports:
       - "${PORT:-8080}:8080"

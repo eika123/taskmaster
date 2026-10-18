@@ -3,7 +3,7 @@
 [web.app]
 
 # HTML title tag content
-title = "todolist"
+title = "taskmaster"
 
 # include `assets` in web platform
 [web.resource]

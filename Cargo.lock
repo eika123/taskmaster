@@ -6386,6 +6386,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
+name = "taskmaster"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "axum_session",
+ "axum_session_auth",
+ "chrono",
+ "dioxus",
+ "dioxus-fullstack",
+ "http",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tower",
+ "validator",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6517,29 +6540,6 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
-
-[[package]]
-name = "todolist"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum",
- "axum_session",
- "axum_session_auth",
- "chrono",
- "dioxus",
- "dioxus-fullstack",
- "http",
- "rand 0.8.8",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tower",
- "validator",
-]
 
 [[package]]
 name = "tokio"

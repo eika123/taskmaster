@@ -286,8 +286,8 @@ mod tests {
         assert!(is_public_path("/login"));
         assert!(is_public_path("/register"));
         assert!(is_public_path("/assets/main.css"));
-        assert!(is_public_path("/wasm/todolist.js"));
-        assert!(is_public_path("/wasm/todolist_bg.wasm"));
+        assert!(is_public_path("/wasm/taskmaster.js"));
+        assert!(is_public_path("/wasm/taskmaster_bg.wasm"));
         assert!(is_public_path("/favicon.ico"));
         assert!(is_public_path("/_dioxus/ws"));
         assert!(is_public_path("/api/login12345"));
@@ -347,7 +347,7 @@ mod tests {
         use axum::body::{to_bytes, Body};
         use tower::ServiceExt;
 
-        let public_dir = std::path::Path::new("target/dx/todolist/debug/web/public");
+        let public_dir = std::path::Path::new("target/dx/taskmaster/debug/web/public");
         if public_dir.exists() {
             std::env::set_var("DIOXUS_PUBLIC_PATH", public_dir);
             let router = dioxus::server::router(crate::App);

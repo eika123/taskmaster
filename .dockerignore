@@ -2,16 +2,16 @@
 target/*
 !target/dx/
 target/dx/*
-!target/dx/todolist/
-target/dx/todolist/*
-!target/dx/todolist/debug/
-!target/dx/todolist/release/
-target/dx/todolist/debug/*
-!target/dx/todolist/debug/web/
-target/dx/todolist/debug/web/server-*
-target/dx/todolist/release/*
-!target/dx/todolist/release/web/
-target/dx/todolist/release/web/server-*
+!target/dx/taskmaster/
+target/dx/taskmaster/*
+!target/dx/taskmaster/debug/
+!target/dx/taskmaster/release/
+target/dx/taskmaster/debug/*
+!target/dx/taskmaster/debug/web/
+target/dx/taskmaster/debug/web/server-*
+target/dx/taskmaster/release/*
+!target/dx/taskmaster/release/web/
+target/dx/taskmaster/release/web/server-*
 
 # Ignore version control and local development artifacts
 .git

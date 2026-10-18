@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY target/dx/todolist/${DX_PROFILE}/web/server /app/server
-COPY target/dx/todolist/${DX_PROFILE}/web/public /app/public
+COPY target/dx/taskmaster/${DX_PROFILE}/web/server /app/server
+COPY target/dx/taskmaster/${DX_PROFILE}/web/public /app/public
 
 ENV IP=0.0.0.0
 ENV PORT=8080
